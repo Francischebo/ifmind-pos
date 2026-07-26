@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    
+    <!-- Primary Meta Tags -->
+    <title>IFMind-POS - Professional Wholesale Point of Sale System</title>
+    <meta name="title" content="IFMind-POS - Professional Wholesale Point of Sale System" />
+    <meta name="description" content="IFMind-POS: Professional wholesale point-of-sale system with offline capability, inventory management, sales tracking, and real-time reporting. Manage your wholesale business efficiently with our modern POS solution." />
+    <meta name="keywords" content="wholesale POS, point of sale, inventory management, sales tracking, offline POS, business management, retail software, IFMind-POS" />
+    <meta name="author" content="IFMind Technologies" />
+    <meta name="robots" content="index, follow" />
+    
+    <!-- PWA Meta Tags -->
+    <meta name="theme-color" content="#1e293b" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="IFMind-POS" />
+    
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://ifmind-pos.com/" />
+    <meta property="og:title" content="IFMind-POS - Professional Wholesale Point of Sale System" />
+    <meta property="og:description" content="Professional wholesale point-of-sale system with offline capability, inventory management, and real-time reporting. Streamline your wholesale business operations." />
+    <meta property="og:site_name" content="IFMind-POS" />
+
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:url" content="https://ifmind-pos.com/" />
+    <meta name="twitter:title" content="IFMind-POS - Professional Wholesale Point of Sale System" />
+    <meta name="twitter:description" content="Professional wholesale point-of-sale system with offline capability, inventory management, and real-time reporting." />
+    
+    <!-- Canonical URL -->
+    <link rel="canonical" href="https://ifmind-pos.com/" />
+    
+    <!-- Favicon & Apple Touch Icons -->
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <link rel="apple-touch-icon" href="/pwa-192x192.png" />
+    <link rel="manifest" href="/manifest.json" />
+    
+    <!-- Critical CSS - Inlined for instant rendering -->
+    <style>
+      /* Critical CSS - Prevents FOUC and ensures instant styling */
+      *,*::before,*::after{box-sizing:border-box;border-width:0;border-style:solid}
+      html{line-height:1.5;-webkit-text-size-adjust:100%;-moz-tab-size:4;tab-size:4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,'Noto Sans',sans-serif,'Apple Color Emoji','Segoe UI Emoji','Segoe UI Symbol','Noto Color Emoji';font-feature-settings:normal;font-variation-settings:normal}
+      body{margin:0;line-height:inherit;background-color:hsl(210,40%,98%);color:hsl(222,47%,11%)}
+      .dark body{background-color:hsl(222,47%,11%);color:hsl(210,40%,98%)}
+      #root{min-height:100vh;min-height:100dvh;display:flex;flex-direction:column}
+      
+      /* Loading skeleton styles */
+      .loading-skeleton{animation:pulse 2s cubic-bezier(0.4,0,0.6,1) infinite;background:linear-gradient(90deg,hsl(210,40%,96%) 0%,hsl(210,40%,90%) 50%,hsl(210,40%,96%) 100%);background-size:200% 100%}
+      .dark .loading-skeleton{background:linear-gradient(90deg,hsl(217,33%,17%) 0%,hsl(217,33%,22%) 50%,hsl(217,33%,17%) 100%);background-size:200% 100%}
+      @keyframes pulse{0%,100%{background-position:200% 0}50%{background-position:0 0}}
+      
+      /* Initial app shell */
+      .app-shell{display:flex;min-height:100vh;min-height:100dvh}
+      .app-sidebar{width:16rem;flex-shrink:0;background:hsl(222,47%,11%);color:hsl(210,40%,98%)}
+      .app-main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+      .app-header{height:4rem;border-bottom:1px solid hsl(214,32%,91%);display:flex;align-items:center;padding:0 1.5rem}
+      .dark .app-header{border-color:hsl(217,33%,17%)}
+      .app-content{flex:1;overflow-y:auto;padding:1.5rem}
+      
+      /* Touch-friendly sizing */
+      button,a,[role="button"]{min-height:44px;min-width:44px}
+      
+      /* Responsive utilities */
+      @media(max-width:768px){.app-sidebar{display:none}.app-shell{flex-direction:column}}
+    </style>
+  </head>
+
+  <body>
+    <div id="root">
+      <!-- App shell for instant loading feel -->
+      <div class="app-shell" id="app-loading">
+        <aside class="app-sidebar"></aside>
+        <main class="app-main">
+          <header class="app-header">
+            <div class="loading-skeleton" style="width:150px;height:24px;border-radius:4px"></div>
+          </header>
+          <div class="app-content">
+            <div class="loading-skeleton" style="width:100%;height:200px;border-radius:8px;margin-bottom:1rem"></div>
+            <div class="loading-skeleton" style="width:60%;height:24px;border-radius:4px;margin-bottom:0.5rem"></div>
+            <div class="loading-skeleton" style="width:80%;height:24px;border-radius:4px"></div>
+          </div>
+        </main>
+      </div>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+    <script>
+      // Remove loading shell once React hydrates
+      window.addEventListener('DOMContentLoaded', function() {
+        var loadingEl = document.getElementById('app-loading');
+        if (loadingEl) {
+          // Give React a moment to mount
+          setTimeout(function() {
+            if (loadingEl.parentNode && loadingEl.parentNode.children.length > 1) {
+              loadingEl.remove();
+            }
+          }, 100);
+        }
+      });
+    </script>
+  </body>
+</html>
