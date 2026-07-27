@@ -182,6 +182,9 @@ AppDataSource.initialize().then(async () => {
     const { TaxService } = require("./services/TaxService");
     await TaxService.initDefaultTaxClass(AppDataSource.manager);
 
+    const { AdminSetupService } = require("./services/AdminSetupService");
+    await AdminSetupService.initDefaultAdmin(AppDataSource.manager);
+
     httpServer.listen(PORT, () => {
         console.log(`Server and WebSockets running on http://localhost:${PORT}`);
     });
