@@ -1,0 +1,275 @@
+import { Request, Response } from "express";
+import { randomUUID } from "node:crypto";
+import { AppDataSource } from "../data-source";
+import { PaymentCheckoutItem, PaymentCheckoutSession } from "../entity/PaymentCheckoutSession";
+import { Product } from "../entity/Product";
+import { ProductBatch } from "../entity/ProductBatch";
+import { TaxClass } from "../entity/TaxClass";
+import { Shift, ShiftStatus } from "../entity/Shift";
+import { WarehouseStock } from "../entity/WarehouseStock";
+import { MpesaTransaction } from "../entity/MpesaTransaction";
+import { getReservedQuantity } from "../services/CheckoutReservationService";
+
+const blockedBatchStatuses = new Set(["pending", "rejected", "failed", "hold", "on_hold"]);
+
+const sanitizeCheckoutPayload = (input: unknown) => {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+        throw new Error("Checkout payload must be an object");
+    }
+
+    const payload = input as Record<string, unknown>;
+    const id = typeof payload.checkout_session_id === "string" ? payload.checkout_session_id.trim() : "";
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)) {
+        throw new Error("checkout_session_id must be a valid UUID");
+    }
+    if (!Array.isArray(payload.items) || payload.items.length === 0 || payload.items.length > 100) {
+        throw new Error("items must contain between 1 and 100 products");
+    }
+    const itemQuantities = new Map<string, number>();
+    payload.items.forEach((value: unknown) => {
+        if (!value || typeof value !== "object" || Array.isArray(value)) {
+            throw new Error("Each checkout item must be an object");
+        }
+        const item = value as Record<string, unknown>;
+        const product_id = typeof item.product_id === "string" ? item.product_id.trim() : "";
+        const quantity = Number(item.quantity);
+        if (!product_id || !Number.isInteger(quantity) || quantity <= 0) {
+            throw new Error("Each checkout item requires a product and positive whole-number quantity");
+        }
+        itemQuantities.set(product_id, (itemQuantities.get(product_id) || 0) + quantity);
+    });
+    const items = Array.from(itemQuantities, ([product_id, quantity]) => ({ product_id, quantity }));
+    const optionalString = (key: string) => {
+        const value = payload[key];
+        if (value === undefined || value === null || value === "") return null;
+        if (typeof value !== "string" || !value.trim()) throw new Error(`${key} must be a valid string`);
+        return value.trim();
+    };
+    const loyalty_discount = Number(payload.loyalty_discount || 0);
+    const cash_amount = Number(payload.cash_amount || 0);
+    const store_credit_amount = Number(payload.store_credit_amount || 0);
+    const store_credit_barcode = optionalString("store_credit_barcode");
+    if (![loyalty_discount, cash_amount, store_credit_amount].every((amount) => Number.isFinite(amount) && amount >= 0)) {
+        throw new Error("Checkout discounts and payment amounts must be non-negative numbers");
+    }
+    if (store_credit_barcode && store_credit_barcode.length > 20) {
+        throw new Error("store_credit_barcode cannot exceed 20 characters");
+    }
+
+    return {
+        id,
+        items,
+        warehouse_id: optionalString("warehouse_id"),
+        customer_id: optionalString("customer_id"),
+        store_credit_barcode,
+        loyalty_discount,
+        cash_amount,
+        store_credit_amount,
+    };
+};
+
+export class CheckoutController {
+    static async reserve(req: any, res: Response) {
+        const queryRunner = AppDataSource.createQueryRunner();
+        await queryRunner.connect();
+        await queryRunner.startTransaction();
+        try {
+            if (!req.user?.id) throw new Error("Authenticated cashier is required");
+            const payload = sanitizeCheckoutPayload(req.body);
+            const shift = await queryRunner.manager.findOneBy(Shift, {
+                cashier_id: req.user.id,
+                status: ShiftStatus.OPEN,
+            });
+            if (!shift) throw new Error("Open a shift before reserving stock for checkout");
+
+            const existing = await queryRunner.manager.findOne(PaymentCheckoutSession, {
+                where: { id: payload.id },
+                lock: { mode: "pessimistic_write" },
+            });
+            if (existing) {
+                const sameItems = existing.items.length === payload.items.length &&
+                    existing.items.every((item, index) =>
+                        item.product_id === payload.items[index].product_id &&
+                        item.quantity === payload.items[index].quantity);
+                if (existing.cashier_id !== req.user.id || existing.status !== "reserved" ||
+                    !sameItems || existing.warehouse_id !== payload.warehouse_id ||
+                    existing.customer_id !== payload.customer_id ||
+                    existing.store_credit_barcode !== payload.store_credit_barcode ||
+                    Number(existing.loyalty_discount) !== payload.loyalty_discount ||
+                    Number(existing.cash_amount) !== payload.cash_amount ||
+                    Number(existing.store_credit_amount) !== payload.store_credit_amount) {
+                    throw new Error("Checkout session already exists and cannot be changed");
+                }
+                await queryRunner.commitTransaction();
+                return res.json(existing);
+            }
+
+            const productIds = Array.from(new Set(payload.items.map((item) => item.product_id))).sort();
+            const products = new Map<string, Product>();
+            for (const productId of productIds) {
+                const product = await queryRunner.manager.findOne(Product, {
+                    where: { id: productId },
+                    lock: { mode: "pessimistic_write" },
+                });
+                if (!product) throw new Error("One or more checkout products no longer exist");
+                products.set(productId, product);
+            }
+
+            const activeSessions = await queryRunner.manager.find(PaymentCheckoutSession, {
+                where: { status: "reserved" },
+            });
+            const snapshot: PaymentCheckoutItem[] = [];
+            let subtotal = 0;
+            let taxAmount = 0;
+            for (const item of payload.items) {
+                const product = products.get(item.product_id);
+                if (!product) throw new Error("One or more checkout products no longer exist");
+                const reservedGlobal = getReservedQuantity(activeSessions, product.id, payload.id);
+                if (Number(product.stock_on_hand) - reservedGlobal < item.quantity) {
+                    throw new Error(`${product.name} does not have enough unreserved stock`);
+                }
+
+                if (payload.warehouse_id) {
+                    const branchStock = await queryRunner.manager.findOne(WarehouseStock, {
+                        where: { warehouse_id: payload.warehouse_id, product_id: product.id },
+                        lock: { mode: "pessimistic_write" },
+                    });
+                    const reservedBranch = getReservedQuantity(activeSessions, product.id, payload.id, payload.warehouse_id);
+                    if (!branchStock || Number(branchStock.stock_on_hand) - reservedBranch < item.quantity) {
+                        throw new Error(`${product.name} does not have enough unreserved stock at this branch`);
+                    }
+                }
+
+                const batches = await queryRunner.manager.find(ProductBatch, {
+                    where: { product_id: product.id },
+                });
+                const blockedQuantity = batches
+                    .filter((batch) => blockedBatchStatuses.has((batch.quality_check_status ?? "").toLowerCase().trim()))
+                    .reduce((sum, batch) => sum + Math.max(0, Number(batch.current_quantity) || 0), 0);
+                const approvedQuantity = batches
+                    .filter((batch) => !blockedBatchStatuses.has((batch.quality_check_status ?? "").toLowerCase().trim()))
+                    .reduce((sum, batch) => sum + Math.max(0, Number(batch.current_quantity) || 0), 0);
+                if (blockedQuantity > 0 && approvedQuantity - reservedGlobal < item.quantity) {
+                    throw new Error(`${product.name} has stock pending a quality check or reservation`);
+                }
+
+                const unitPrice = Number(product.retail_price);
+                const taxClass = product.tax_class_id
+                    ? await queryRunner.manager.findOneBy(TaxClass, { id: product.tax_class_id })
+                    : null;
+                const taxRate = taxClass ? Number(taxClass.rate) : Number(product.tax_rate) || 0;
+                const lineTotal = unitPrice * item.quantity;
+                subtotal += lineTotal;
+                taxAmount += lineTotal * taxRate / 100;
+                snapshot.push({
+                    product_id: product.id,
+                    quantity: item.quantity,
+                    unit_price: unitPrice,
+                    tax_rate: taxRate,
+                    sku: product.sku,
+                    barcode: product.barcode ?? null,
+                    name: product.name,
+                });
+            }
+
+            if (payload.loyalty_discount > subtotal) throw new Error("Discount exceeds checkout subtotal");
+            const session = queryRunner.manager.create(PaymentCheckoutSession, {
+                id: payload.id || randomUUID(),
+                cashier_id: req.user.id,
+                warehouse_id: payload.warehouse_id,
+                customer_id: payload.customer_id,
+                store_credit_barcode: payload.store_credit_barcode,
+                items: snapshot,
+                subtotal,
+                tax_amount: taxAmount,
+                total_amount: Math.max(0, subtotal - payload.loyalty_discount) + taxAmount,
+                loyalty_discount: payload.loyalty_discount,
+                cash_amount: payload.cash_amount,
+                store_credit_amount: payload.store_credit_amount,
+                status: "reserved",
+            });
+            await queryRunner.manager.save(session);
+            await queryRunner.commitTransaction();
+            return res.status(201).json(session);
+        } catch (error) {
+            await queryRunner.rollbackTransaction();
+            const message = error instanceof Error ? error.message : "Failed to reserve checkout stock";
+            if (message.includes("duplicate key")) {
+                return res.status(409).json({ message: "Checkout session already exists" });
+            }
+            return res.status(400).json({ message });
+        } finally {
+            await queryRunner.release();
+        }
+    }
+
+    static async get(req: any, res: Response) {
+        try {
+            const sessionId = String(req.params.checkoutSessionId || "");
+            const session = await AppDataSource.getRepository(PaymentCheckoutSession).findOneBy({ id: sessionId });
+            if (!session) return res.status(404).json({ message: "Checkout session not found" });
+            if (session.cashier_id !== req.user?.id && req.user?.role !== "admin") {
+                return res.status(403).json({ message: "Not authorized for this checkout session" });
+            }
+            const transactions = await AppDataSource.getRepository(MpesaTransaction).find({
+                where: { checkout_session_id: session.id },
+                order: { created_at: "ASC" },
+            });
+            return res.json({
+                ...session,
+                mpesa_transactions: transactions.map((transaction: any) => ({
+                    id: transaction.id,
+                    status: transaction.status,
+                    amount: Number(transaction.amount),
+                    mpesa_receipt_number: transaction.mpesa_receipt_number,
+                    checkout_request_id: transaction.checkout_request_id,
+                    account_reference: transaction.account_reference,
+                })),
+            });
+        } catch (error) {
+            console.error("Checkout session fetch error:", error);
+            return res.status(500).json({ message: "Failed to fetch checkout session" });
+        }
+    }
+
+    static async cancel(req: any, res: Response) {
+        const queryRunner = AppDataSource.createQueryRunner();
+        await queryRunner.connect();
+        await queryRunner.startTransaction();
+        try {
+            const session = await queryRunner.manager.findOne(PaymentCheckoutSession, {
+                where: { id: String(req.params.checkoutSessionId || "") },
+                lock: { mode: "pessimistic_write" },
+            });
+            if (!session) {
+                await queryRunner.rollbackTransaction();
+                return res.status(404).json({ message: "Checkout session not found" });
+            }
+            if (session.cashier_id !== req.user?.id && req.user?.role !== "admin") {
+                await queryRunner.rollbackTransaction();
+                return res.status(403).json({ message: "Not authorized for this checkout session" });
+            }
+            if (session.status !== "reserved") {
+                await queryRunner.rollbackTransaction();
+                return res.status(409).json({ message: "Checkout session is no longer active" });
+            }
+            const transactions = await queryRunner.manager.find(MpesaTransaction, {
+                where: { checkout_session_id: session.id },
+            }) as Array<{ status: string }>;
+            if (transactions.some((transaction) => transaction.status === "pending" || transaction.status === "completed")) {
+                await queryRunner.rollbackTransaction();
+                return res.status(409).json({ message: "A pending or completed M-Pesa payment prevents releasing this stock reservation" });
+            }
+            session.status = "cancelled";
+            await queryRunner.manager.save(session);
+            await queryRunner.commitTransaction();
+            return res.json({ success: true });
+        } catch (error) {
+            await queryRunner.rollbackTransaction();
+            console.error("Checkout session cancellation error:", error);
+            return res.status(500).json({ message: "Failed to cancel checkout session" });
+        } finally {
+            await queryRunner.release();
+        }
+    }
+}

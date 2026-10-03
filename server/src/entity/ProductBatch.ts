@@ -41,7 +41,7 @@ export class ProductBatch {
     @Column({ nullable: true })
     supplier_batch_reference: string;
 
-    @Column({ default: 'pending' })
+    @Column({ default: 'passed' })
     quality_check_status: string;
 
     @Column({ nullable: true })

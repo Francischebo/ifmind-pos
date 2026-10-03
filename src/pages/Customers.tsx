@@ -1,4 +1,4 @@
-import { validatePhoneNumber, sanitizeInput, secureApiCall, apiRateLimiter } from '@/lib/security';
+import { validatePhoneNumber, normalizeKenyanPhoneNumber, sanitizeInput, secureApiCall, apiRateLimiter } from '@/lib/security';
 import { ApiService } from '@/lib/api';
 import { useState, useEffect } from 'react';
 import { toast } from 'sonner';
@@ -91,7 +91,7 @@ export default function Customers() {
     }
 
     if (!validatePhoneNumber(sanitizedPhone)) {
-      toast.error('Please enter a valid Kenyan phone number (254XXXXXXXXX)');
+      toast.error('Please enter a valid Kenyan phone number (e.g. 0712345678 or 254712345678)');
       return;
     }
 
@@ -101,9 +101,16 @@ export default function Customers() {
     }
 
     try {
+      const normalizedPhone = normalizeKenyanPhoneNumber(sanitizedPhone);
+
+      if (!normalizedPhone) {
+        toast.error('Please enter a valid Kenyan phone number (e.g. 0712345678 or 254712345678)');
+        return;
+      }
+
       const customerData = {
         name: sanitizedName,
-        phone: sanitizedPhone,
+        phone: normalizedPhone,
         email: sanitizedEmail || null,
       };
 

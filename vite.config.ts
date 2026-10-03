@@ -60,12 +60,12 @@ export default defineConfig(({ mode }) => ({
     // Re-enable PWA with security hardening - Windows path issue resolved
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
+      includeAssets: ['cfi-pos-techiez-mark.png'],
       manifest: {
-        name: 'Secure Retail POS System',
-        short_name: 'POS System',
-        description: 'Enterprise-grade Point of Sale system with zero-trust security',
-        theme_color: '#000000',
+        name: 'CFI-POS Techiez',
+        short_name: 'CFI POS',
+        description: 'Smart point of sale for smart businesses, with sales, inventory, and reporting tools.',
+        theme_color: '#0c234b',
         background_color: '#ffffff',
         display: 'standalone',
         orientation: 'portrait-primary',
@@ -75,12 +75,14 @@ export default defineConfig(({ mode }) => ({
           {
             src: 'pwa-192x192.png',
             sizes: '192x192',
-            type: 'image/png'
+            type: 'image/png',
+            purpose: 'any maskable'
           },
           {
             src: 'pwa-512x512.png',
             sizes: '512x512',
-            type: 'image/png'
+            type: 'image/png',
+            purpose: 'any maskable'
           }
         ]
       },

@@ -5,6 +5,7 @@ import { SaleItem } from "../entity/SaleItem";
 import { Product } from "../entity/Product";
 import { Customer } from "../entity/Customer";
 import { MoreThanOrEqual } from "typeorm";
+import { InventoryService } from "../services/InventoryService";
 
 export class DashboardController {
     static async getDashboardStats(req: Request, res: Response) {
@@ -107,9 +108,14 @@ export class DashboardController {
                 .slice(0, 5);
 
             // Get products info
-            const products = await productRepo.find();
+            const [products, stockTotals] = await Promise.all([
+                productRepo.find(),
+                InventoryService.getTotalStockByProduct(AppDataSource.manager),
+            ]);
             const totalProducts = products.length;
-            const lowStockCount = products.filter(p => p.stock_on_hand <= p.reorder_level).length;
+            const lowStockCount = products.filter(
+                (product) => InventoryService.getTotalStockOnHand(product, stockTotals) <= product.reorder_level,
+            ).length;
 
             // Get customers
             const totalCustomers = await customerRepo.count();

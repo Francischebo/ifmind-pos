@@ -4,41 +4,45 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Navbar } from "@/components/Navbar";
+import { AppSidebar } from "@/components/AppSidebar";
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { AuthProvider } from "@/hooks/useAuth";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { PWAInstallPrompt } from "@/components/PWAInstallPrompt";
 import { OfflineIndicator } from "@/components/OfflineIndicator";
 import { initializeSecurity } from "@/lib/security";
-import { useEffect } from "react";
-import Landing from "./pages/Landing";
-import Auth from "./pages/Auth";
-import Dashboard from "./pages/Dashboard";
-import Products from "./pages/Products";
-import NewProduct from "./pages/NewProduct";
-import Sales from "./pages/Sales";
-import Customers from "./pages/Customers";
-import Vendors from "./pages/Vendors";
-import PurchaseOrders from "./pages/PurchaseOrders";
-import NewPurchaseOrder from "./pages/NewPurchaseOrder";
-import ReceivePurchaseOrder from "./pages/ReceivePurchaseOrder";
-import MobileCashier from "./pages/MobileCashier";
-import Locations from "./pages/Locations";
-import InventoryTransfers from "./pages/InventoryTransfers";
-import VendorPortal from "./pages/VendorPortal";
-import Reports from "./pages/Reports";
-import Returns from "./pages/Returns";
-import Shifts from "./pages/Shifts";
-import Loyalty from "./pages/Loyalty";
-import Settings from "./pages/Settings";
-import Users from "./pages/Users";
-import NotFound from "./pages/NotFound";
-import Invoices from "./pages/Invoices";
-import DeliveryNotes from "./pages/DeliveryNotes";
-import SupplierInvoices from "./pages/SupplierInvoices";
-import StockMovements from "./pages/StockMovements";
-import AccountsReceivable from "./pages/AccountsReceivable";
-import InventoryAdjustments from "./pages/InventoryAdjustments";
-import StockTakes from "./pages/StockTakes";
+import { lazy, Suspense, useEffect } from "react";
+
+const Landing = lazy(() => import("./pages/Landing"));
+const Auth = lazy(() => import("./pages/Auth"));
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Products = lazy(() => import("./pages/Products"));
+const NewProduct = lazy(() => import("./pages/NewProduct"));
+const Sales = lazy(() => import("./pages/Sales"));
+const Customers = lazy(() => import("./pages/Customers"));
+const Vendors = lazy(() => import("./pages/Vendors"));
+const PurchaseOrders = lazy(() => import("./pages/PurchaseOrders"));
+const NewPurchaseOrder = lazy(() => import("./pages/NewPurchaseOrder"));
+const ReceivePurchaseOrder = lazy(() => import("./pages/ReceivePurchaseOrder"));
+const MobileCashier = lazy(() => import("./pages/MobileCashier"));
+const Locations = lazy(() => import("./pages/Locations"));
+const InventoryTransfers = lazy(() => import("./pages/InventoryTransfers"));
+const VendorPortal = lazy(() => import("./pages/VendorPortal"));
+const Reports = lazy(() => import("./pages/Reports"));
+const Returns = lazy(() => import("./pages/Returns"));
+const Shifts = lazy(() => import("./pages/Shifts"));
+const Loyalty = lazy(() => import("./pages/Loyalty"));
+const Settings = lazy(() => import("./pages/Settings"));
+const Users = lazy(() => import("./pages/Users"));
+const NotFound = lazy(() => import("./pages/NotFound"));
+const Invoices = lazy(() => import("./pages/Invoices"));
+const DeliveryNotes = lazy(() => import("./pages/DeliveryNotes"));
+const SupplierInvoices = lazy(() => import("./pages/SupplierInvoices"));
+const StockMovements = lazy(() => import("./pages/StockMovements"));
+const AccountsReceivable = lazy(() => import("./pages/AccountsReceivable"));
+const InventoryAdjustments = lazy(() => import("./pages/InventoryAdjustments"));
+const StockTakes = lazy(() => import("./pages/StockTakes"));
+const InventoryOperations = lazy(() => import("./pages/InventoryOperations"));
 
 const queryClient = new QueryClient();
 
@@ -46,7 +50,7 @@ const App = () => {
   useEffect(() => {
     // Initialize security systems on app startup
     initializeSecurity().catch((error) => {
-      console.error('Failed to initialize security systems:', error);
+      console.error("Failed to initialize security systems:", error);
     });
   }, []);
 
@@ -57,57 +61,133 @@ const App = () => {
         <Sonner />
         <PWAInstallPrompt />
         <OfflineIndicator />
-        <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <BrowserRouter>
           <AuthProvider>
-            <Routes>
-            <Route path="/" element={<Landing />} />
-            <Route path="/auth" element={<Auth />} />
-            <Route
-              path="/*"
-              element={
-                <ProtectedRoute>
-                  <div className="min-h-screen w-full bg-gradient-to-br from-background via-background to-muted/20">
-                    <Navbar />
-                    <main className="container mx-auto px-2 sm:px-4 py-4 sm:py-6">
-                      <Routes>
-                        <Route path="/dashboard" element={<Dashboard />} />
-                        <Route path="/products" element={<Products />} />
-                        <Route path="/products/new" element={<NewProduct />} />
-                        <Route path="/sales" element={<Sales />} />
-                        <Route path="/invoices" element={<Invoices />} />
-                        <Route path="/customers" element={<Customers />} />
-                        <Route path="/vendors" element={<Vendors />} />
-                        <Route path="/purchase-orders" element={<PurchaseOrders />} />
-                        <Route path="/purchase-orders/new" element={<NewPurchaseOrder />} />
-                        <Route path="/purchase-orders/:id/receive" element={<ReceivePurchaseOrder />} />
-                        <Route path="/delivery-notes" element={<DeliveryNotes />} />
-                        <Route path="/supplier-invoices" element={<SupplierInvoices />} />
-                        <Route path="/stock-movements" element={<StockMovements />} />
-                        <Route path="/accounts-receivable" element={<AccountsReceivable />} />
-                        <Route path="/mobile-cashier" element={<MobileCashier />} />
-                        <Route path="/locations" element={<Locations />} />
-                        <Route path="/inventory-transfers" element={<InventoryTransfers />} />
-                        <Route path="/inventory-adjustments" element={<InventoryAdjustments />} />
-                        <Route path="/stock-takes" element={<StockTakes />} />
-                        <Route path="/vendor-portal" element={<VendorPortal />} />
-                        <Route path="/reports" element={<Reports />} />
-                        <Route path="/returns" element={<Returns />} />
-                        <Route path="/shifts" element={<Shifts />} />
-                        <Route path="/loyalty" element={<Loyalty />} />
-                        <Route path="/settings" element={<Settings />} />
-                        <Route path="/users" element={<Users />} />
-                        <Route path="*" element={<NotFound />} />
-                      </Routes>
-                    </main>
-                  </div>
-                </ProtectedRoute>
+            <Suspense
+              fallback={
+                <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">
+                  Loading page...
+                </div>
               }
-            />
-          </Routes>
-        </AuthProvider>
-      </BrowserRouter>
-    </TooltipProvider>
-  </QueryClientProvider>
+            >
+              <Routes>
+                <Route path="/" element={<Landing />} />
+                <Route path="/auth" element={<Auth />} />
+                <Route
+                  path="/*"
+                  element={
+                    <ProtectedRoute>
+                      <div className="h-svh w-full overflow-hidden bg-gradient-to-br from-background via-background to-muted/20">
+                        <SidebarProvider>
+                          <AppSidebar />
+                          <SidebarInset className="h-svh min-h-0 min-w-0 overflow-hidden">
+                            <Navbar />
+                            <main className="app-route-scroll min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain">
+                              <div className="app-route-content mx-auto w-full max-w-[1920px] px-2 py-3 sm:px-4 sm:py-4 lg:px-6">
+                                <Routes>
+                                <Route
+                                  path="/dashboard"
+                                  element={<Dashboard />}
+                                />
+                                <Route
+                                  path="/products"
+                                  element={<Products />}
+                                />
+                                <Route
+                                  path="/products/new"
+                                  element={<NewProduct />}
+                                />
+                                <Route path="/sales" element={<Sales />} />
+                                <Route
+                                  path="/invoices"
+                                  element={<Invoices />}
+                                />
+                                <Route
+                                  path="/customers"
+                                  element={<Customers />}
+                                />
+                                <Route path="/vendors" element={<Vendors />} />
+                                <Route
+                                  path="/purchase-orders"
+                                  element={<PurchaseOrders />}
+                                />
+                                <Route
+                                  path="/purchase-orders/new"
+                                  element={<NewPurchaseOrder />}
+                                />
+                                <Route
+                                  path="/purchase-orders/:id/receive"
+                                  element={<ReceivePurchaseOrder />}
+                                />
+                                <Route
+                                  path="/delivery-notes"
+                                  element={<DeliveryNotes />}
+                                />
+                                <Route
+                                  path="/supplier-invoices"
+                                  element={<SupplierInvoices />}
+                                />
+                                <Route
+                                  path="/stock-movements"
+                                  element={<StockMovements />}
+                                />
+                                <Route
+                                  path="/inventory-operations"
+                                  element={<InventoryOperations />}
+                                />
+                                <Route
+                                  path="/accounts-receivable"
+                                  element={<AccountsReceivable />}
+                                />
+                                <Route
+                                  path="/mobile-cashier"
+                                  element={<MobileCashier />}
+                                />
+                                <Route
+                                  path="/locations"
+                                  element={<Locations />}
+                                />
+                                <Route
+                                  path="/inventory-transfers"
+                                  element={<InventoryTransfers />}
+                                />
+                                <Route
+                                  path="/inventory-adjustments"
+                                  element={<InventoryAdjustments />}
+                                />
+                                <Route
+                                  path="/stock-takes"
+                                  element={<StockTakes />}
+                                />
+                                <Route
+                                  path="/vendor-portal"
+                                  element={<VendorPortal />}
+                                />
+                                <Route path="/reports" element={<Reports />} />
+                                <Route path="/returns" element={<Returns />} />
+                                <Route path="/shifts" element={<Shifts />} />
+                                <Route path="/loyalty" element={<Loyalty />} />
+                                <Route
+                                  path="/settings"
+                                  element={<Settings />}
+                                />
+                                <Route path="/users" element={<Users />} />
+                                <Route path="*" element={<NotFound />} />
+                                </Routes>
+                              </div>
+                            </main>
+                          </SidebarInset>
+                        </SidebarProvider>
+                      </div>
+                    </ProtectedRoute>
+                  }
+                />
+              </Routes>
+            </Suspense>
+          </AuthProvider>
+        </BrowserRouter>
+      </TooltipProvider>
+    </QueryClientProvider>
   );
 };
 

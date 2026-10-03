@@ -1,10 +1,17 @@
-import { useEffect, useState } from 'react';
-import { supabase } from '@/integrations/supabase/client';
-import { Button } from '@/components/ui/button';
-import { Printer, Usb } from 'lucide-react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { LoyaltyPointsDisplay } from './LoyaltyPointsDisplay';
-import { printerService } from '@/lib/hardware/escpos';
+import { useCallback, useEffect, useState } from "react";
+import { ApiService } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { Printer, Usb } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { LoyaltyPointsDisplay } from "./LoyaltyPointsDisplay";
+import { printerService } from "@/lib/hardware/escpos";
+import { resolveCompanyLogoUrl } from "@/hooks/useCompanyBranding";
 
 interface ReceiptProps {
   saleId: string;
@@ -14,9 +21,9 @@ interface ReceiptProps {
 interface Sale {
   id: string;
   created_at: string;
-  total_amount: number;
-  subtotal: number;
-  tax_amount: number;
+  total_amount: number | string;
+  subtotal: number | string;
+  tax_amount: number | string;
   payment_method: string;
   payment_status: string;
   cash_amount: number | null;
@@ -49,61 +56,116 @@ interface Sale {
 interface MpesaTransaction {
   mpesa_receipt_number: string | null;
   phone_number: string;
-  amount: number;
+  amount: number | string;
+}
+
+interface ServerSaleItem {
+  quantity: number | string;
+  unit_price: number | string;
+  line_total: number | string;
+  product: { name: string; sku: string };
+}
+
+interface ServerSale {
+  id: string;
+  created_at: string;
+  total_amount: number | string;
+  subtotal: number | string;
+  tax_amount: number | string;
+  payment_method: string;
+  payment_status: string;
+  cash_amount: number | string | null;
+  mpesa_amount: number | string | null;
+  change_amount: number | string | null;
+  loyalty_discount: number | string | null;
+  items: ServerSaleItem[];
+  customer: {
+    id: string;
+    name: string;
+    phone: string;
+    email?: string | null;
+  } | null;
+  cashier: {
+    id: string;
+    email: string;
+    profile?: { full_name: string } | null;
+  };
 }
 
 export function Receipt({ saleId, onClose }: ReceiptProps) {
   const [sale, setSale] = useState<Sale | null>(null);
   const [settings, setSettings] = useState<Record<string, string>>({});
-  const [mpesaTransaction, setMpesaTransaction] = useState<MpesaTransaction | null>(null);
+  const [mpesaTransaction, setMpesaTransaction] =
+    useState<MpesaTransaction | null>(null);
+
+  const loadData = useCallback(async () => {
+    try {
+      const response = await ApiService.get<{
+        sale: ServerSale;
+        mpesaTransaction: MpesaTransaction | null;
+      }>(`/sales/${saleId}`);
+      const saleData = response.sale;
+      if (saleData) {
+        setSale({
+          id: saleData.id,
+          created_at: saleData.created_at,
+          total_amount: Number(saleData.total_amount),
+          subtotal: Number(saleData.subtotal),
+          tax_amount: Number(saleData.tax_amount),
+          payment_method: saleData.payment_method,
+          payment_status: saleData.payment_status,
+          cash_amount: Number(saleData.cash_amount) || 0,
+          mpesa_amount: Number(saleData.mpesa_amount) || 0,
+          change_amount: Number(saleData.change_amount) || 0,
+          mpesa_receipt_number:
+            response.mpesaTransaction?.mpesa_receipt_number || null,
+          cashier_id: saleData.cashier.id,
+          customer_id: saleData.customer?.id || null,
+          loyalty_discount: saleData.loyalty_discount === null
+            ? null
+            : Number(saleData.loyalty_discount),
+          loyalty_points_redeemed: null,
+          loyalty_points_earned: null,
+          sale_items: saleData.items.map((item) => ({
+            quantity: Number(item.quantity),
+            unit_price: Number(item.unit_price),
+            line_total: Number(item.line_total),
+            products: item.product,
+          })),
+          customers: saleData.customer,
+          profiles: {
+            full_name:
+              saleData.cashier?.profile?.full_name ||
+              saleData.cashier?.email ||
+              "Unknown",
+          },
+        });
+        if (response.mpesaTransaction) {
+          setMpesaTransaction({
+            ...response.mpesaTransaction,
+            amount: Number(response.mpesaTransaction.amount),
+          });
+        }
+      }
+    } catch (error) {
+      console.error("Error loading receipt data:", error);
+    }
+
+    try {
+      const settingsData =
+        await ApiService.get<Record<string, string>>("/receipt-settings");
+      setSettings({
+        ...(settingsData || {}),
+        company_logo: resolveCompanyLogoUrl(settingsData?.company_logo) || "",
+      });
+    } catch (error) {
+      console.error("Error loading receipt settings:", error);
+    }
+  }, [saleId]);
 
   useEffect(() => {
     loadData();
-  }, [saleId]);
-
-  const loadData = async () => {
-    // Load sale with items
-    const { data: saleData } = await supabase
-      .from('sales')
-      .select('*, sale_items(*, products(name, sku)), customers(name, phone)')
-      .eq('id', saleId)
-      .single();
-
-    if (saleData) {
-      // Fetch cashier profile separately
-      const { data: profileData } = await supabase
-        .from('profiles')
-        .select('full_name')
-        .eq('id', saleData.cashier_id)
-        .single();
-
-      setSale({ ...saleData, profiles: profileData || { full_name: 'Unknown' } } as Sale);
-
-      // Fetch M-Pesa transaction details if applicable
-      if (saleData.payment_method === 'mpesa' || saleData.payment_method === 'hybrid') {
-        const { data: mpesaData } = await supabase
-          .from('mpesa_transactions')
-          .select('mpesa_receipt_number, phone_number, amount')
-          .eq('sale_id', saleId)
-          .eq('status', 'completed')
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .single();
-
-        if (mpesaData) {
-          setMpesaTransaction(mpesaData);
-        }
-      }
-    }
-
-    // Load settings
-    const { data: settingsData } = await supabase.from('settings').select('*');
-    const settingsMap: Record<string, string> = {};
-    settingsData?.forEach((s) => {
-      settingsMap[s.key] = s.value;
-    });
-    setSettings(settingsMap);
-  };
+  }, [loadData]);
 
   const handlePrint = () => {
     window.print();
@@ -112,23 +174,23 @@ export function Receipt({ saleId, onClose }: ReceiptProps) {
   const handleThermalPrint = async () => {
     // Basic text generation for the receipt
     const lines = [];
-    lines.push(settings.company_name || 'Wholesale POS');
-    lines.push(settings.company_address || 'Nairobi, Kenya');
-    lines.push('--------------------------------');
+    lines.push(settings.company_name || "Wholesale POS");
+    lines.push(settings.company_address || "Nairobi, Kenya");
+    lines.push("--------------------------------");
     lines.push(`Receipt #: ${sale.id.substring(0, 8).toUpperCase()}`);
-    lines.push(`Date: ${new Date(sale.created_at).toLocaleString('en-KE')}`);
+    lines.push(`Date: ${new Date(sale.created_at).toLocaleString("en-KE")}`);
     lines.push(`Cashier: ${sale.profiles.full_name}`);
-    lines.push('--------------------------------');
-    sale.sale_items.forEach(item => {
+    lines.push("--------------------------------");
+    sale.sale_items.forEach((item) => {
       lines.push(`${item.products.name}`);
       lines.push(`${item.quantity} x ${item.unit_price} = ${item.line_total}`);
     });
-    lines.push('--------------------------------');
+    lines.push("--------------------------------");
     lines.push(`TOTAL: KSh ${sale.total_amount}`);
-    lines.push('--------------------------------');
-    lines.push(settings.receipt_footer || 'Thank you!');
-    
-    const textToPrint = lines.join('\n');
+    lines.push("--------------------------------");
+    lines.push(settings.receipt_footer || "Thank you!");
+
+    const textToPrint = lines.join("\n");
     await printerService.printReceipt(textToPrint);
   };
 
@@ -137,7 +199,8 @@ export function Receipt({ saleId, onClose }: ReceiptProps) {
   const cashAmount = sale.cash_amount || 0;
   const mpesaAmount = sale.mpesa_amount || 0;
   const changeAmount = sale.change_amount || 0;
-  const isHybridPayment = sale.payment_method === 'hybrid' || (cashAmount > 0 && mpesaAmount > 0);
+  const isHybridPayment =
+    sale.payment_method === "hybrid" || (cashAmount > 0 && mpesaAmount > 0);
 
   return (
     <Dialog open={true} onOpenChange={onClose}>
@@ -157,25 +220,42 @@ export function Receipt({ saleId, onClose }: ReceiptProps) {
             </div>
           </DialogTitle>
         </DialogHeader>
+        <DialogDescription className="sr-only">
+          Receipt details for the completed sale.
+        </DialogDescription>
 
         <div id="receipt-content" className="space-y-4 text-sm">
           {/* Company Header */}
           <div className="text-center border-b pb-4">
-            <h2 className="font-bold text-lg">{settings.company_name || 'Wholesale POS'}</h2>
-            <p>{settings.company_address || 'Nairobi, Kenya'}</p>
-            <p>{settings.company_phone || '+254 700 000000'}</p>
-            <p>PIN: {settings.tax_pin || 'P000000000A'}</p>
+            {settings.company_logo && (
+              <img
+                src={settings.company_logo}
+                alt={`${settings.company_name || "Company"} logo`}
+                className="mx-auto mb-2 max-h-16 max-w-full object-contain"
+                onError={(event) => {
+                  event.currentTarget.hidden = true;
+                }}
+              />
+            )}
+            <h2 className="font-bold text-lg">
+              {settings.company_name || "Wholesale POS"}
+            </h2>
+            <p>{settings.company_address || "Nairobi, Kenya"}</p>
+            <p>{settings.company_phone || "+254 700 000000"}</p>
+            <p>PIN: {settings.tax_pin || "P000000000A"}</p>
           </div>
 
           {/* Sale Info */}
           <div className="space-y-1">
             <div className="flex justify-between">
               <span>Receipt #:</span>
-              <span className="font-mono">{sale.id.substring(0, 8).toUpperCase()}</span>
+              <span className="font-mono">
+                {sale.id.substring(0, 8).toUpperCase()}
+              </span>
             </div>
             <div className="flex justify-between">
               <span>Date:</span>
-              <span>{new Date(sale.created_at).toLocaleString('en-KE')}</span>
+              <span>{new Date(sale.created_at).toLocaleString("en-KE")}</span>
             </div>
             <div className="flex justify-between">
               <span>Cashier:</span>
@@ -201,10 +281,17 @@ export function Receipt({ saleId, onClose }: ReceiptProps) {
               <div key={idx} className="space-y-1">
                 <div className="flex justify-between font-medium">
                   <span>{item.products.name}</span>
-                  <span>KSh {item.line_total.toLocaleString('en-KE', { minimumFractionDigits: 2 })}</span>
+                  <span>
+                    KSh{" "}
+                    {item.line_total.toLocaleString("en-KE", {
+                      minimumFractionDigits: 2,
+                    })}
+                  </span>
                 </div>
                 <div className="flex justify-between text-xs text-muted-foreground pl-2">
-                  <span>{item.quantity} x KSh {item.unit_price.toFixed(2)}</span>
+                  <span>
+                    {item.quantity} x KSh {item.unit_price.toFixed(2)}
+                  </span>
                   <span>SKU: {item.products.sku}</span>
                 </div>
               </div>
@@ -215,45 +302,79 @@ export function Receipt({ saleId, onClose }: ReceiptProps) {
           <div className="space-y-1">
             <div className="flex justify-between">
               <span>Subtotal:</span>
-              <span>KSh {sale.subtotal.toLocaleString('en-KE', { minimumFractionDigits: 2 })}</span>
+              <span>
+                KSh{" "}
+                {sale.subtotal.toLocaleString("en-KE", {
+                  minimumFractionDigits: 2,
+                })}
+              </span>
             </div>
             {(sale.loyalty_discount ?? 0) > 0 && (
               <div className="flex justify-between text-green-600 dark:text-green-400">
                 <span>🎁 Loyalty Discount:</span>
-                <span className="font-medium">-KSh {(sale.loyalty_discount ?? 0).toLocaleString('en-KE', { minimumFractionDigits: 2 })}</span>
+                <span className="font-medium">
+                  -KSh{" "}
+                  {(sale.loyalty_discount ?? 0).toLocaleString("en-KE", {
+                    minimumFractionDigits: 2,
+                  })}
+                </span>
               </div>
             )}
             <div className="flex justify-between">
               <span>VAT (16%):</span>
-              <span>KSh {sale.tax_amount.toLocaleString('en-KE', { minimumFractionDigits: 2 })}</span>
+              <span>
+                KSh{" "}
+                {sale.tax_amount.toLocaleString("en-KE", {
+                  minimumFractionDigits: 2,
+                })}
+              </span>
             </div>
             <div className="flex justify-between font-bold text-lg border-t pt-2">
               <span>TOTAL:</span>
-              <span>KSh {sale.total_amount.toLocaleString('en-KE', { minimumFractionDigits: 2 })}</span>
+              <span>
+                KSh{" "}
+                {sale.total_amount.toLocaleString("en-KE", {
+                  minimumFractionDigits: 2,
+                })}
+              </span>
             </div>
           </div>
 
           {/* Payment Breakdown */}
           <div className="border-t border-b py-3 space-y-2 bg-muted/30 rounded px-2">
-            <div className="font-semibold text-center border-b pb-1 mb-2">Payment Details</div>
-            
+            <div className="font-semibold text-center border-b pb-1 mb-2">
+              Payment Details
+            </div>
+
             {cashAmount > 0 && (
               <div className="flex justify-between">
                 <span>💵 Cash Paid:</span>
-                <span className="font-medium">KSh {cashAmount.toLocaleString('en-KE', { minimumFractionDigits: 2 })}</span>
+                <span className="font-medium">
+                  KSh{" "}
+                  {cashAmount.toLocaleString("en-KE", {
+                    minimumFractionDigits: 2,
+                  })}
+                </span>
               </div>
             )}
-            
+
             {mpesaAmount > 0 && (
               <>
                 <div className="flex justify-between">
                   <span>📱 M-Pesa Paid:</span>
-                  <span className="font-medium">KSh {mpesaAmount.toLocaleString('en-KE', { minimumFractionDigits: 2 })}</span>
+                  <span className="font-medium">
+                    KSh{" "}
+                    {mpesaAmount.toLocaleString("en-KE", {
+                      minimumFractionDigits: 2,
+                    })}
+                  </span>
                 </div>
                 {mpesaTransaction?.mpesa_receipt_number && (
                   <div className="flex justify-between text-xs">
                     <span>M-Pesa Ref:</span>
-                    <span className="font-mono font-semibold text-primary">{mpesaTransaction.mpesa_receipt_number}</span>
+                    <span className="font-mono font-semibold text-primary">
+                      {mpesaTransaction.mpesa_receipt_number}
+                    </span>
                   </div>
                 )}
                 {mpesaTransaction?.phone_number && (
@@ -264,35 +385,46 @@ export function Receipt({ saleId, onClose }: ReceiptProps) {
                 )}
               </>
             )}
-            
+
             {changeAmount > 0 && (
               <div className="flex justify-between text-green-600 dark:text-green-400 font-medium border-t pt-1">
                 <span>Change Given:</span>
-                <span>KSh {changeAmount.toLocaleString('en-KE', { minimumFractionDigits: 2 })}</span>
+                <span>
+                  KSh{" "}
+                  {changeAmount.toLocaleString("en-KE", {
+                    minimumFractionDigits: 2,
+                  })}
+                </span>
               </div>
             )}
 
             <div className="flex justify-between text-xs text-muted-foreground pt-1 border-t">
               <span>Payment Method:</span>
               <span className="uppercase font-medium">
-                {isHybridPayment ? 'CASH + M-PESA' : sale.payment_method.toUpperCase()}
+                {isHybridPayment
+                  ? "CASH + M-PESA"
+                  : sale.payment_method.toUpperCase()}
               </span>
             </div>
-            
+
             <div className="flex justify-between text-xs">
               <span>Payment Status:</span>
-              <span className={`font-medium uppercase ${sale.payment_status === 'paid' ? 'text-green-600' : 'text-amber-600'}`}>
+              <span
+                className={`font-medium uppercase ${sale.payment_status === "paid" ? "text-green-600" : "text-amber-600"}`}
+              >
                 {sale.payment_status}
               </span>
             </div>
           </div>
 
           {/* MPESA Info for manual payments */}
-          {settings.mpesa_paybill && sale.payment_method === 'cash' && (
+          {settings.mpesa_paybill && sale.payment_method === "cash" && (
             <div className="text-center text-xs bg-muted p-2 rounded">
               <p>Pay via M-PESA</p>
               <p>Paybill: {settings.mpesa_paybill}</p>
-              {settings.mpesa_till_number && <p>Till: {settings.mpesa_till_number}</p>}
+              {settings.mpesa_till_number && (
+                <p>Till: {settings.mpesa_till_number}</p>
+              )}
             </div>
           )}
 
@@ -306,9 +438,9 @@ export function Receipt({ saleId, onClose }: ReceiptProps) {
 
           {/* Footer */}
           <div className="text-center text-xs border-t pt-4">
-            <p>{settings.receipt_footer || 'Thank you for your business!'}</p>
+            <p>{settings.receipt_footer || "Thank you for your business!"}</p>
             <p className="mt-2 text-muted-foreground">
-              Powered by IFMind-POS System
+              Powered by CFI-POS Techiez
             </p>
           </div>
         </div>
@@ -318,7 +450,7 @@ export function Receipt({ saleId, onClose }: ReceiptProps) {
 }
 
 // Print styles
-const style = document.createElement('style');
+const style = document.createElement("style");
 style.textContent = `
   @media print {
     body * {

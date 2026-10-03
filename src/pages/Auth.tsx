@@ -1,34 +1,41 @@
-import { useState, useEffect } from 'react';
-import { useAuth } from '@/hooks/useAuth';
-import { useNavigate } from 'react-router-dom';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { toast } from 'sonner';
-import { ShoppingCart } from 'lucide-react';
-import { z } from 'zod';
+import { useState, useEffect } from "react";
+import { useAuth } from "@/hooks/useAuth";
+import { useNavigate } from "react-router-dom";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { toast } from "sonner";
+import { ShoppingCart } from "lucide-react";
+import { z } from "zod";
+import cfiLogo from "@/assets/cfi-pos-techiez-logo.png";
 
 const loginSchema = z.object({
-  email: z.string().email('Invalid email address'),
-  password: z.string().min(6, 'Password must be at least 6 characters'),
+  email: z.string().email("Invalid email address"),
+  password: z.string().min(6, "Password must be at least 6 characters"),
 });
 
 const signupSchema = loginSchema.extend({
-  fullName: z.string().min(2, 'Full name must be at least 2 characters'),
+  fullName: z.string().min(2, "Full name must be at least 2 characters"),
 });
 
 export default function Auth() {
   const { signIn, verifyOtp, signUp, user } = useAuth();
   const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(false);
-  const [authStep, setAuthStep] = useState<'login' | 'signup' | 'otp'>('login');
+  const [authStep, setAuthStep] = useState<"login" | "signup" | "otp">("login");
   const [currentOtpToken, setCurrentOtpToken] = useState<string | null>(null);
 
   useEffect(() => {
     if (user) {
-      navigate('/dashboard', { replace: true });
+      navigate("/dashboard", { replace: true });
     }
   }, [user, navigate]);
 
@@ -37,22 +44,22 @@ export default function Auth() {
     setIsLoading(true);
 
     const formData = new FormData(e.currentTarget);
-    const email = formData.get('email') as string;
-    const password = formData.get('password') as string;
+    const email = formData.get("email") as string;
+    const password = formData.get("password") as string;
 
     try {
       loginSchema.parse({ email, password });
       const { error, needsOtp, otpToken } = await signIn(email, password);
       if (error) {
-        const errorMsg = typeof error === 'string' ? error : error.message;
-        if (errorMsg && errorMsg.includes('Invalid login credentials')) {
-          toast.error('Invalid email or password');
+        const errorMsg = typeof error === "string" ? error : error.message;
+        if (errorMsg && errorMsg.includes("Invalid login credentials")) {
+          toast.error("Invalid email or password");
         } else {
-          toast.error(errorMsg || 'Login failed');
+          toast.error(errorMsg || "Login failed");
         }
       } else if (needsOtp && otpToken) {
         setCurrentOtpToken(otpToken);
-        setAuthStep('otp');
+        setAuthStep("otp");
         toast.success("Please check your email for the OTP");
       }
     } catch (error) {
@@ -70,7 +77,7 @@ export default function Auth() {
 
     setIsLoading(true);
     const formData = new FormData(e.currentTarget);
-    const code = formData.get('code') as string;
+    const code = formData.get("code") as string;
 
     const { error } = await verifyOtp(currentOtpToken, code);
     if (error) {
@@ -86,23 +93,33 @@ export default function Auth() {
     setIsLoading(true);
 
     const formData = new FormData(e.currentTarget);
-    const email = formData.get('email') as string;
-    const password = formData.get('password') as string;
-    const fullName = formData.get('fullName') as string;
+    const email = formData.get("email") as string;
+    const password = formData.get("password") as string;
+    const fullName = formData.get("fullName") as string;
 
     try {
       signupSchema.parse({ email, password, fullName });
-      const { error, needsOtp, otpToken } = await signUp(email, password, fullName);
+      const { error, needsOtp, otpToken } = await signUp(
+        email,
+        password,
+        fullName,
+      );
       if (error) {
-        const errorMsg = typeof error === 'string' ? error : error.message;
-        if (errorMsg && (errorMsg.includes('already registered') || errorMsg.includes('User already exists'))) {
-          toast.error('This email is already registered. Please login instead.');
+        const errorMsg = typeof error === "string" ? error : error.message;
+        if (
+          errorMsg &&
+          (errorMsg.includes("already registered") ||
+            errorMsg.includes("User already exists"))
+        ) {
+          toast.error(
+            "This email is already registered. Please login instead.",
+          );
         } else {
-          toast.error(errorMsg || 'Registration failed');
+          toast.error(errorMsg || "Registration failed");
         }
       } else if (needsOtp && otpToken) {
         setCurrentOtpToken(otpToken);
-        setAuthStep('otp');
+        setAuthStep("otp");
         toast.success("Account created! Please check your email for the OTP");
       }
     } catch (error) {
@@ -114,13 +131,20 @@ export default function Auth() {
     }
   };
 
-  if (authStep === 'otp') {
+  if (authStep === "otp") {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background p-4">
+      <div className="flex min-h-screen flex-col items-center justify-center bg-background p-4">
+        <img
+          src={cfiLogo}
+          alt="CFI-POS Techiez Limited Company"
+          className="mb-4 h-auto w-full max-w-xs object-contain"
+        />
         <Card className="w-full max-w-md">
           <CardHeader className="text-center">
             <CardTitle className="text-2xl">Security Verification</CardTitle>
-            <CardDescription>Enter the 6-digit OTP sent to your email.</CardDescription>
+            <CardDescription>
+              Enter the 6-digit OTP sent to your email.
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleVerifyOtp} className="space-y-4">
@@ -136,9 +160,14 @@ export default function Auth() {
                 />
               </div>
               <Button type="submit" className="w-full" disabled={isLoading}>
-                {isLoading ? 'Verifying...' : 'Verify OTP'}
+                {isLoading ? "Verifying..." : "Verify OTP"}
               </Button>
-              <Button type="button" variant="ghost" className="w-full mt-2" onClick={() => setAuthStep('login')}>
+              <Button
+                type="button"
+                variant="ghost"
+                className="w-full mt-2"
+                onClick={() => setAuthStep("login")}
+              >
                 Cancel
               </Button>
             </form>
@@ -149,7 +178,12 @@ export default function Auth() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background p-4">
+    <div className="flex min-h-screen flex-col items-center justify-center bg-background p-4">
+      <img
+        src={cfiLogo}
+        alt="CFI-POS Techiez Limited Company"
+        className="mb-4 h-auto w-full max-w-xs object-contain"
+      />
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
           <div className="flex justify-center mb-4">
@@ -157,11 +191,17 @@ export default function Auth() {
               <ShoppingCart className="h-6 w-6 text-primary-foreground" />
             </div>
           </div>
-          <CardTitle className="text-2xl">Wholesale POS System</CardTitle>
-          <CardDescription>Manage your wholesale business efficiently</CardDescription>
+          <CardTitle className="text-2xl">CFI-POS Techiez</CardTitle>
+          <CardDescription>
+            Manage your wholesale business efficiently
+          </CardDescription>
         </CardHeader>
         <CardContent>
-          <Tabs value={authStep} onValueChange={(val) => setAuthStep(val as any)} className="w-full">
+          <Tabs
+            value={authStep}
+            onValueChange={(val) => setAuthStep(val as any)}
+            className="w-full"
+          >
             <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="login">Login</TabsTrigger>
               <TabsTrigger value="signup">Sign Up</TabsTrigger>
@@ -189,7 +229,7 @@ export default function Auth() {
                   />
                 </div>
                 <Button type="submit" className="w-full" disabled={isLoading}>
-                  {isLoading ? 'Logging in...' : 'Login'}
+                  {isLoading ? "Logging in..." : "Login"}
                 </Button>
               </form>
             </TabsContent>
@@ -226,7 +266,7 @@ export default function Auth() {
                   />
                 </div>
                 <Button type="submit" className="w-full" disabled={isLoading}>
-                  {isLoading ? 'Creating account...' : 'Sign Up'}
+                  {isLoading ? "Creating account..." : "Sign Up"}
                 </Button>
               </form>
             </TabsContent>

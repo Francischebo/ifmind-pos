@@ -1,0 +1,923 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { strToU8, zipSync } from "fflate";
+import { verifyPesapalSignature } from "../lib/pesapal";
+import { sanitizeCategoryName } from "./CategoryController";
+import {
+  getProductImportPersistenceError,
+  normalizeProductImportRow,
+  parseProductImportFile,
+  parseProductImportNumber,
+  sanitizeProductPayload,
+  selectProductImportWarehouse,
+} from "./ProductController";
+import { getCompanyLogoMimeType, sanitizeSettingsPayload, sanitizeLoyaltyMemberPayload, sanitizeLoyaltyPointsPayload } from "./LoyaltyController";
+import { sanitizeCustomerPayload } from "./CustomerController";
+import { sanitizeVendorPayload } from "./VendorController";
+import { sanitizeWarehousePayload } from "./WarehouseController";
+import { sanitizeSupplierInvoicePayload, sanitizeSupplierPaymentPayload, sanitizeRequisitionStatusPayload } from "./ProcurementController";
+import { sanitizeShiftCurrency } from "./ShiftController";
+import { sanitizeAuthRegistrationPayload, sanitizeAuthLoginPayload } from "./AuthController";
+import { sanitizeInvoicePaymentPayload } from "./InvoiceController";
+import { sanitizeUserAdminUpdatePayload, sanitizeUserRolePayload } from "./UserAdminController";
+import { sanitizeInventoryAdjustmentPayload, sanitizeInventoryTransferPayload, sanitizeTransferStatusPayload, sanitizeStockTakePayload } from "./InventoryController";
+import { sanitizeReturnRequestPayload, sanitizeApproveReturnPayload, sanitizeRejectReturnPayload, sanitizeMpesaRefundReceipt } from "./ReturnController";
+import { calculateCashChange, deriveSalePaymentMethod, sanitizeSalePayload, sanitizeVoidSalePayload, sanitizeParkedSalePayload } from "./SalesController";
+import { sanitizePurchaseOrderCreatePayload, sanitizePurchaseOrderStatusPayload } from "./PurchaseOrderController";
+import { sanitizeTaxClassPayload, sanitizeTaxClassUpdatePayload } from "./TaxController";
+import {
+  getMpesaStkConfigurationIssues,
+  hashMpesaCallbackToken,
+  sanitizeMpesaStkPayload,
+  verifyMpesaCallbackToken,
+} from "./PaymentController";
+import { shouldUseDevOtpFallback } from "../services/EmailService";
+import { createInventoryPredictions, type DailySalesPoint } from "../services/InventoryPredictionService";
+import {
+  DEFAULT_PRODUCT_UNIT_OF_MEASURES,
+  isConfiguredProductUnit,
+  normalizeProductUnitOfMeasures,
+  parseProductUnitOfMeasures,
+} from "../services/ProductCatalogSettings";
+
+test("development OTP fallback is enabled when email delivery is not configured", () => {
+  const originalNodeEnv = process.env.NODE_ENV;
+  const originalResendApiKey = process.env.RESEND_API_KEY;
+
+  process.env.NODE_ENV = "development";
+  delete process.env.RESEND_API_KEY;
+
+  assert.equal(shouldUseDevOtpFallback(), true);
+
+  if (originalNodeEnv === undefined) {
+    delete process.env.NODE_ENV;
+  } else {
+    process.env.NODE_ENV = originalNodeEnv;
+  }
+
+  if (originalResendApiKey) {
+    process.env.RESEND_API_KEY = originalResendApiKey;
+  }
+});
+
+test("local frontend origins should include the active dev ports used by Vite", () => {
+  const allowedOrigins = (process.env.CORS_ORIGINS || "").split(",").map((origin) => origin.trim()).filter(Boolean);
+
+  assert.ok(allowedOrigins.includes("http://localhost:4173"), "localhost:4173 should be allowed");
+  assert.ok(allowedOrigins.includes("http://127.0.0.1:4173"), "127.0.0.1:4173 should be allowed");
+});
+
+test("verifyPesapalSignature rejects unsigned payloads", () => {
+  process.env.PESAPAL_IPN_SECRET = "test-secret";
+
+  const payload = {
+    OrderTrackingId: "tracking-123",
+    OrderMerchantReference: "merchant-ref-123",
+    OrderNotificationType: "IPNCHANGE",
+  };
+
+  assert.equal(verifyPesapalSignature(payload, "bad-signature"), false);
+  assert.equal(verifyPesapalSignature(payload), false);
+});
+
+test("verifyPesapalSignature accepts a valid HMAC signature", () => {
+  process.env.PESAPAL_IPN_SECRET = "test-secret";
+
+  const payload = {
+    OrderTrackingId: "tracking-123",
+    OrderMerchantReference: "merchant-ref-123",
+    OrderNotificationType: "IPNCHANGE",
+  };
+
+  const signature = "e83820fc36f985d925cbe3000e43035551bd9ca1d0c159827da0c6699acc0018";
+  assert.equal(verifyPesapalSignature(payload, signature), true);
+});
+
+test("M-Pesa callback token hashes reject missing and altered tokens", () => {
+  const callbackToken = "callback-token-for-test-only";
+  const callbackTokenHash = hashMpesaCallbackToken(callbackToken);
+
+  assert.equal(verifyMpesaCallbackToken(callbackToken, callbackTokenHash), true);
+  assert.equal(verifyMpesaCallbackToken("altered-token", callbackTokenHash), false);
+  assert.equal(verifyMpesaCallbackToken(callbackToken, null), false);
+});
+
+test("M-Pesa STK setup accepts a saved Till and server credentials with a public callback", () => {
+  const environment = {
+    MPESA_CONSUMER_KEY: "test-consumer-key",
+    MPESA_CONSUMER_SECRET: "test-consumer-secret",
+    MPESA_PASSKEY: "test-passkey",
+    MPESA_API_BASE_URL: "https://api.safaricom.test",
+  };
+
+  assert.deepEqual(
+    getMpesaStkConfigurationIssues(
+      environment,
+      "174379",
+      "https://pos.example.test/api/webhooks/mpesa/callback",
+    ),
+    [],
+  );
+});
+
+test("M-Pesa STK setup reports missing callback without exposing credential values", () => {
+  const environment = {
+    MPESA_CONSUMER_KEY: "test-consumer-key",
+    MPESA_CONSUMER_SECRET: "test-consumer-secret",
+    MPESA_PASSKEY: "test-passkey",
+    MPESA_API_BASE_URL: "https://api.safaricom.test",
+  };
+
+  const issues = getMpesaStkConfigurationIssues(environment, "174379");
+  assert.equal(issues.length, 1);
+  assert.match(issues[0], /public HTTPS STK callback URL/);
+  assert.ok(issues.every((issue) => !issue.includes("test-consumer")));
+});
+
+test("sanitizeProductPayload strips untrusted fields", () => {
+  const payload = {
+    sku: "SKU-001",
+    name: "Coffee Beans",
+    unit_cost: 120,
+    retail_price: 180,
+    stock_on_hand: 5,
+    is_parent: true,
+    admin_override: "yes",
+    created_at: "2025-01-01",
+  };
+
+  const result = sanitizeProductPayload(payload);
+
+  assert.deepEqual(result, {
+    sku: "SKU-001",
+    name: "Coffee Beans",
+    unit_cost: 120,
+    retail_price: 180,
+    stock_on_hand: 5,
+    is_parent: true,
+  });
+});
+
+test("normalizeProductImportRow maps common spreadsheet columns to the internal product schema", () => {
+  const result = normalizeProductImportRow({
+    SKU: "SKU-1001",
+    Barcode: "1234567890123",
+    Name: "Tea Leaves",
+    Category: "Beverages",
+    unit_cost: "120",
+    retail_price: "180",
+    tax_rate: "16",
+    UOM: "kg",
+    reorder_level: "8",
+    opening_stock: "25",
+    location: "main",
+    warehouse_name: "Main Warehouse",
+  });
+
+  assert.deepEqual(result, {
+    sku: "SKU-1001",
+    barcode: "1234567890123",
+    name: "Tea Leaves",
+    category_name: "Beverages",
+    tax_class_name: "",
+    warehouse_name: "Main Warehouse",
+    unit_cost: "120",
+    retail_price: "180",
+    tax_rate: "16",
+    unit_of_measure: "kg",
+    reorder_level: "8",
+    stock_on_hand: "25",
+    location: "main",
+  });
+});
+
+test("normalizeProductImportRow leaves optional references empty and handles spreadsheet header whitespace", () => {
+  const result = normalizeProductImportRow({
+    " SKU ": " SKU-1002 ",
+    " Product Name ": "Rice 5kg",
+    "Opening Stock": "0",
+  });
+
+  assert.equal(result.sku, "SKU-1002");
+  assert.equal(result.name, "Rice 5kg");
+  assert.equal(result.stock_on_hand, "0");
+  assert.equal(result.category_name, "");
+  assert.equal(result.barcode, null);
+});
+
+test("normalizeProductImportRow accepts common item, currency, and quantity header variants", () => {
+  const result = normalizeProductImportRow({
+    "Product Code": "SKU-1003",
+    "Product Name": "Cooking Oil",
+    "Unit Cost (KES)": "1,250.00",
+    "Selling Price (KSh)": "1,600",
+    "Opening Stock (Units)": "12",
+  });
+
+  assert.equal(result.sku, "SKU-1003");
+  assert.equal(result.name, "Cooking Oil");
+  assert.equal(result.unit_cost, "1,250.00");
+  assert.equal(result.retail_price, "1,600");
+  assert.equal(result.stock_on_hand, "12");
+});
+
+test("parseProductImportFile reads CSV rows and preserves quoted commas", async () => {
+  const csv = Buffer.from("sku,name,unit_cost\nSKU-2001,\"Tea, Green\",12.5\n");
+  const rows = await parseProductImportFile(csv, "products.csv");
+
+  assert.deepEqual(rows, [{ sku: "SKU-2001", name: "Tea, Green", unit_cost: "12.5" }]);
+});
+
+test("parseProductImportFile detects semicolon-delimited CSV exports", async () => {
+  const csv = Buffer.from("sku;name;unit_cost;retail_price\nSKU-2003;Rice 5kg;1,250.00;1,600\n");
+  const rows = await parseProductImportFile(csv, "products.csv");
+
+  assert.deepEqual(rows, [{
+    sku: "SKU-2003",
+    name: "Rice 5kg",
+    unit_cost: "1,250.00",
+    retail_price: "1,600",
+  }]);
+});
+
+test("product import parses the supplied tab-separated product row without losing fields", async () => {
+  const tsv = Buffer.from([
+    "sku\tbarcode\tname\tcategory_name\ttax_class_name\tunit_cost\tretail_price\ttax_rate\tunit_of_measure\treorder_level\tstock_on_hand\tlocation\twarehouse_name",
+    "21028382\t616140000\tBlue Band\tFood\tStandard VAT\t45\t69\t16\tgrams\t20\t90\tHeadquarters\tMain Warehouse",
+  ].join("\n"));
+  const rows = await parseProductImportFile(tsv, "products.csv");
+
+  assert.equal(rows.length, 1);
+  assert.deepEqual(normalizeProductImportRow(rows[0]), {
+    sku: "21028382",
+    barcode: "616140000",
+    name: "Blue Band",
+    category_name: "Food",
+    tax_class_name: "Standard VAT",
+    warehouse_name: "Main Warehouse",
+    unit_cost: "45",
+    retail_price: "69",
+    tax_rate: "16",
+    unit_of_measure: "grams",
+    reorder_level: "20",
+    stock_on_hand: "90",
+    location: "Headquarters",
+  });
+});
+
+test("product import numbers support grouped thousands and KES prefixes", () => {
+  assert.equal(parseProductImportNumber("KES 1,250.50"), 1250.5);
+  assert.equal(parseProductImportNumber("KSh 2,000"), 2000);
+  assert.equal(parseProductImportNumber("invalid"), Number.NaN);
+});
+
+test("product import selects the configured main warehouse for opening stock when omitted", () => {
+  const warehouses = [
+    { name: "Overflow", is_main: false },
+    { name: "Main Store", is_main: true },
+  ];
+
+  assert.equal(selectProductImportWarehouse("", 5, warehouses)?.name, "Main Store");
+  assert.equal(selectProductImportWarehouse(" overflow ", 5, warehouses)?.name, "Overflow");
+  assert.equal(selectProductImportWarehouse("", 0, warehouses), undefined);
+  assert.equal(selectProductImportWarehouse("", 5, []), undefined);
+});
+
+test("product import maps database constraint failures to useful row messages", () => {
+  assert.match(
+    getProductImportPersistenceError({ driverError: { code: "23505", constraint: "UQ_products_sku" } }),
+    /SKU already exists/,
+  );
+  assert.match(
+    getProductImportPersistenceError({ driverError: { code: "23502", column: "category_id" } }),
+    /category_id/,
+  );
+});
+
+test("parseProductImportFile reads rows from a valid XLSX workbook", async () => {
+  const files = {
+    "[Content_Types].xml": strToU8(`<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`),
+    "_rels/.rels": strToU8(`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`),
+    "xl/workbook.xml": strToU8(`<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Products" sheetId="1" r:id="rId1"/></sheets></workbook>`),
+    "xl/_rels/workbook.xml.rels": strToU8(`<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`),
+    "xl/worksheets/sheet1.xml": strToU8(`<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>sku</t></is></c><c r="B1" t="inlineStr"><is><t>name</t></is></c><c r="C1" t="inlineStr"><is><t>opening stock</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>SKU-2002</t></is></c><c r="B2" t="inlineStr"><is><t>Rice 5kg</t></is></c><c r="C2"><v>12</v></c></row></sheetData></worksheet>`),
+  };
+  const workbook = Buffer.from(zipSync(files));
+
+  const rows = await parseProductImportFile(workbook, "products.xlsx");
+
+  assert.deepEqual(rows, [{ sku: "SKU-2002", name: "Rice 5kg", "opening stock": "12" }]);
+});
+
+test("parseProductImportFile rejects invalid XLSX payloads", async () => {
+  await assert.rejects(() => parseProductImportFile(Buffer.from("not an xlsx file"), "products.xlsx"));
+});
+
+test("sanitizeSettingsPayload only accepts supported keys", () => {
+  const payload = {
+    company_name: "Northwind",
+    tax_pin: "P123456789A",
+    loyalty_points_rate: "2",
+    mpesa_callback_url: "https://pos.example.test/api/webhooks/mpesa/callback",
+    malicious_key: "should-not-save",
+    receipt_footer: "Thanks!",
+  };
+
+  const result = sanitizeSettingsPayload(payload);
+
+  assert.deepEqual(result, {
+    company_name: "Northwind",
+    tax_pin: "P123456789A",
+    loyalty_points_rate: "2",
+    mpesa_callback_url: "https://pos.example.test/api/webhooks/mpesa/callback",
+    receipt_footer: "Thanks!",
+  });
+});
+
+test("product catalog settings validate and persist configured units of measure", () => {
+  const units = normalizeProductUnitOfMeasures([" grams ", "box"]);
+  assert.deepEqual(units, ["grams", "box"]);
+  assert.deepEqual(parseProductUnitOfMeasures(JSON.stringify(units)), units);
+  assert.deepEqual(parseProductUnitOfMeasures(undefined), DEFAULT_PRODUCT_UNIT_OF_MEASURES);
+  assert.equal(isConfiguredProductUnit("GRAMS", units), true);
+  assert.equal(isConfiguredProductUnit("piece", units), false);
+  assert.throws(() => normalizeProductUnitOfMeasures(["kg", " KG "]), /listed more than once/);
+  assert.throws(() => normalizeProductUnitOfMeasures([]), /at least one/);
+  assert.throws(() => parseProductUnitOfMeasures("{invalid"), /invalid JSON/);
+
+  assert.deepEqual(
+    sanitizeSettingsPayload({ product_unit_of_measures: JSON.stringify(units) }),
+    { product_unit_of_measures: JSON.stringify(units) },
+  );
+  assert.throws(
+    () => sanitizeSettingsPayload({ product_unit_of_measures: '["kg","KG"]' }),
+    /listed more than once/,
+  );
+});
+
+test("product categories require trimmed names within the supported length", () => {
+  assert.equal(sanitizeCategoryName({ name: "  Food " }), "Food");
+  assert.throws(() => sanitizeCategoryName({ name: "  " }), /required/);
+  assert.throws(() => sanitizeCategoryName({ name: "x".repeat(101) }), /100 characters/);
+});
+
+test("company logo uploads recognize supported raster image signatures only", () => {
+  assert.equal(
+    getCompanyLogoMimeType(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+    "image/png",
+  );
+  assert.equal(getCompanyLogoMimeType(Buffer.from([0xff, 0xd8, 0xff, 0x00])), "image/jpeg");
+  assert.equal(getCompanyLogoMimeType(Buffer.from("RIFF0000WEBP")), "image/webp");
+  assert.equal(getCompanyLogoMimeType(Buffer.from("<svg></svg>")), null);
+  assert.equal(getCompanyLogoMimeType(Buffer.from([0x89, 0x50])), null);
+});
+
+test("sales forecasts use exactly the supplied complete daily buckets and recent 30-day average", () => {
+  const dailySales: DailySalesPoint[] = Array.from({ length: 90 }, (_, index) => ({
+    date: new Date(Date.UTC(2026, 0, 1 + index)).toISOString().slice(0, 10),
+    total: index < 60 ? 100 : 200,
+    count: 1,
+  }));
+  const result = createInventoryPredictions([], dailySales);
+
+  assert.equal(result.salesForecast.historyDays, 90);
+  assert.equal(result.salesForecast.historicalTransactions, 90);
+  assert.equal(result.salesForecast.activeSalesDays, 90);
+  assert.equal(result.salesForecast.baselineDailySales, 200);
+  assert.equal(result.salesForecast.next7Days, 1400);
+  assert.equal(result.salesForecast.next30Days, 6000);
+  assert.equal(result.salesForecast.trendDirection, "increasing");
+  assert.equal(result.salesForecast.confidence, "high");
+});
+
+test("stock reorder recommendations match configured reorder levels, without arbitrary minimum quantities", () => {
+  const dailySales: DailySalesPoint[] = Array.from({ length: 90 }, (_, index) => ({
+    date: new Date(Date.UTC(2026, 0, 1 + index)).toISOString().slice(0, 10),
+    total: 0,
+    count: 0,
+  }));
+  const result = createInventoryPredictions([
+    { id: "out", name: "Out of stock", sku: "OUT", stock_on_hand: 0, reorder_level: 10 },
+    { id: "low", name: "Low stock", sku: "LOW", stock_on_hand: 2, reorder_level: 5 },
+    { id: "healthy", name: "Healthy", sku: "OK", stock_on_hand: 6, reorder_level: 5 },
+    { id: "unset", name: "Unconfigured", sku: "NONE", stock_on_hand: 0, reorder_level: 0 },
+  ], dailySales);
+
+  assert.deepEqual(
+    result.inventoryAlerts.map((alert) => [alert.sku, alert.suggestedReorderQty, alert.urgency]),
+    [["OUT", 10, "critical"], ["NONE", 0, "critical"], ["LOW", 3, "high"]],
+  );
+  assert.match(result.inventoryAlerts[1].reasoning, /no reorder level is configured/);
+  assert.equal(result.salesForecast.next7Days, 0);
+  assert.equal(result.salesForecast.trendDirection, "stable");
+  assert.equal(result.salesForecast.confidence, "low");
+});
+
+test("sanitizeCustomerPayload strips untrusted fields", () => {
+  const payload = {
+    name: "Jane Doe",
+    phone: "+254700000000",
+    email: "jane@example.com",
+    store_credit_balance: 250,
+    is_frequent: true,
+    password: "secret",
+    purchase_count: 4,
+  };
+
+  const result = sanitizeCustomerPayload(payload);
+
+  assert.deepEqual(result, {
+    name: "Jane Doe",
+    phone: "+254700000000",
+    email: "jane@example.com",
+    store_credit_balance: 250,
+    is_frequent: true,
+    purchase_count: 4,
+  });
+});
+
+test("sanitizeVendorPayload strips untrusted fields", () => {
+  const payload = {
+    name: "Supplier Co",
+    contact_person: "Alice",
+    phone: "+254700111222",
+    email: "vendor@example.com",
+    address: "Nairobi",
+    payment_terms: "Net 30",
+    admin_override: "yes",
+  };
+
+  const result = sanitizeVendorPayload(payload);
+
+  assert.deepEqual(result, {
+    name: "Supplier Co",
+    contact_person: "Alice",
+    phone: "+254700111222",
+    email: "vendor@example.com",
+    address: "Nairobi",
+    payment_terms: "Net 30",
+  });
+});
+
+test("sanitizeWarehousePayload strips untrusted fields", () => {
+  const payload = {
+    name: "Main Warehouse",
+    location_address: "Nairobi CBD",
+    is_main: true,
+    is_active: false,
+    admin_override: "yes",
+  };
+
+  const result = sanitizeWarehousePayload(payload);
+
+  assert.deepEqual(result, {
+    name: "Main Warehouse",
+    location_address: "Nairobi CBD",
+    is_main: true,
+    is_active: false,
+  });
+});
+
+test("sanitizeSupplierInvoicePayload strips untrusted fields", () => {
+  const payload = {
+    invoice_number: "INV-1001",
+    vendor_id: "vendor-1",
+    po_id: "po-1",
+    delivery_note_id: "dn-1",
+    subtotal: 800,
+    tax_amount: 80,
+    total_amount: 880,
+    notes: "Urgent",
+    created_by: "attacker-user",
+  };
+
+  const result = sanitizeSupplierInvoicePayload(payload);
+
+  assert.deepEqual(result, {
+    invoice_number: "INV-1001",
+    vendor_id: "vendor-1",
+    po_id: "po-1",
+    delivery_note_id: "dn-1",
+    subtotal: 800,
+    tax_amount: 80,
+    total_amount: 880,
+    notes: "Urgent",
+  });
+});
+
+test("sanitizeSupplierPaymentPayload strips untrusted fields", () => {
+  const payload = {
+    amount: 440,
+    payment_method: "bank_transfer",
+    reference_number: "REF-123",
+    payment_date: "2026-10-01",
+    notes: "Partial settlement",
+    paid_by: "attacker-user",
+  };
+
+  const result = sanitizeSupplierPaymentPayload(payload);
+
+  assert.deepEqual(result, {
+    amount: 440,
+    payment_method: "bank_transfer",
+    reference_number: "REF-123",
+    payment_date: "2026-10-01",
+    notes: "Partial settlement",
+  });
+});
+
+test("sanitizeShiftCurrency rejects negative and non-numeric values", () => {
+  assert.equal(sanitizeShiftCurrency(2500, "opening_float"), 2500);
+  assert.throws(() => sanitizeShiftCurrency(-5, "opening_float"), /non-negative number/);
+  assert.throws(() => sanitizeShiftCurrency("abc", "actual_cash"), /non-negative number/);
+});
+
+test("sanitizeAuthRegistrationPayload normalizes and validates auth fields", () => {
+  assert.deepEqual(
+    sanitizeAuthRegistrationPayload({
+      email: "  User@Test.com  ",
+      password: "StrongPass123!",
+      full_name: "  Jane Doe  ",
+      role: "admin",
+    }),
+    {
+      email: "user@test.com",
+      password: "StrongPass123!",
+      full_name: "Jane Doe",
+    }
+  );
+
+  assert.throws(() => sanitizeAuthRegistrationPayload({ email: "not-an-email", password: "weak", full_name: "User" }), /email|password|full_name/i);
+  assert.throws(() => sanitizeAuthRegistrationPayload({ email: "user@example.com", password: "StrongPass123!", full_name: "" }), /full_name/i);
+});
+
+test("sanitizeAuthLoginPayload requires normalized credentials", () => {
+  assert.deepEqual(sanitizeAuthLoginPayload({ email: "  USER@EXAMPLE.COM  ", password: "StrongPass123!" }), {
+    email: "user@example.com",
+    password: "StrongPass123!",
+  });
+
+  assert.throws(() => sanitizeAuthLoginPayload({ email: "bad", password: "pass" }), /email/i);
+  assert.throws(() => sanitizeAuthLoginPayload({ email: "user@example.com", password: "" }), /password/i);
+});
+
+test("sanitizeInvoicePaymentPayload only accepts valid invoice payment fields", () => {
+  assert.deepEqual(
+    sanitizeInvoicePaymentPayload({
+      amount: 2500,
+      payment_method: "mpesa",
+      reference_number: "REF-42",
+      mpesa_receipt: "MPESA-001",
+      notes: "Paid in full",
+      admin_override: "yes",
+    }),
+    {
+      amount: 2500,
+      payment_method: "mpesa",
+      reference_number: "REF-42",
+      mpesa_receipt: "MPESA-001",
+      notes: "Paid in full",
+    }
+  );
+
+  assert.throws(() => sanitizeInvoicePaymentPayload({ amount: -10, payment_method: "cash" }), /amount/i);
+  assert.throws(() => sanitizeInvoicePaymentPayload({ amount: 10, payment_method: "bitcoin" }), /payment_method/i);
+});
+
+test("sanitizeUserAdminUpdatePayload normalizes admin profile edits", () => {
+  assert.deepEqual(
+    sanitizeUserAdminUpdatePayload({
+      full_name: "  Jane Doe  ",
+      email: "  jane@example.com  ",
+      is_active: true,
+      role: "admin",
+    }),
+    {
+      full_name: "Jane Doe",
+      email: "jane@example.com",
+    }
+  );
+
+  assert.throws(() => sanitizeUserAdminUpdatePayload({ full_name: "", email: "bad-email" }), /email|full_name/i);
+  assert.throws(() => sanitizeUserAdminUpdatePayload({ full_name: "A".repeat(101), email: "user@example.com" }), /full_name/i);
+});
+
+test("sanitizeInventoryAdjustmentPayload and sanitizeInventoryTransferPayload enforce trusted enums and numbers", () => {
+  assert.deepEqual(
+    sanitizeInventoryAdjustmentPayload({
+      product_id: "prod-1",
+      warehouse_id: "wh-1",
+      type: "shrinkage",
+      quantity_adjusted: -5,
+      reason: "  Wrong count  ",
+      malicious: "ignored",
+    }),
+    {
+      product_id: "prod-1",
+      warehouse_id: "wh-1",
+      type: "shrinkage",
+      quantity_adjusted: -5,
+      reason: "Wrong count",
+    }
+  );
+
+  assert.deepEqual(
+    sanitizeInventoryTransferPayload({
+      product_id: "prod-1",
+      from_warehouse_id: "wh-1",
+      to_warehouse_id: "wh-2",
+      quantity: 12,
+      bad_status: "approved",
+    }),
+    {
+      product_id: "prod-1",
+      from_warehouse_id: "wh-1",
+      to_warehouse_id: "wh-2",
+      quantity: 12,
+    }
+  );
+
+  assert.throws(() => sanitizeInventoryAdjustmentPayload({ product_id: "prod-1", warehouse_id: "wh-1", type: "admin_override", quantity_adjusted: 1, reason: "x" }), /type/i);
+  assert.throws(() => sanitizeInventoryTransferPayload({ product_id: "prod-1", from_warehouse_id: "wh-1", to_warehouse_id: "wh-2", quantity: 0 }), /quantity/i);
+});
+
+test("sanitizeReturnRequestPayload and sanitizeApproveReturnPayload validate return workflows", () => {
+  assert.deepEqual(
+    sanitizeReturnRequestPayload({
+      sale_id: "sale-1",
+      reason: "  Damaged item  ",
+      items: [{ sale_item_id: "item-1", quantity: 2, malicious: "drop" }],
+      extra: "drop",
+    }),
+    {
+      sale_id: "sale-1",
+      reason: "Damaged item",
+      items: [{ sale_item_id: "item-1", quantity: 2 }],
+    }
+  );
+  assert.throws(
+    () => sanitizeReturnRequestPayload({
+      sale_id: "sale-1",
+      reason: "Duplicate lines",
+      items: [
+        { sale_item_id: "item-1", quantity: 1 },
+        { sale_item_id: "item-1", quantity: 1 },
+      ],
+    }),
+    /only appear once/,
+  );
+
+  assert.deepEqual(
+    sanitizeApproveReturnPayload({
+      items_conditions: [{ return_item_id: "ret-1", condition: "sellable" }],
+      refund_method: "cash",
+      extra: 1,
+    }),
+    {
+      items_conditions: [{ return_item_id: "ret-1", condition: "sellable" }],
+      refund_method: "cash",
+    }
+  );
+
+  assert.deepEqual(sanitizeRejectReturnPayload({ rejection_reason: "  Policy violation  ", extra: "drop" }), {
+    rejection_reason: "Policy violation",
+  });
+
+  test("sanitizeMpesaRefundReceipt normalizes Safaricom receipt codes and rejects malformed values", () => {
+    assert.equal(sanitizeMpesaRefundReceipt({ receipt_number: " qwe1234567 " }), "QWE1234567");
+    assert.throws(
+      () => sanitizeMpesaRefundReceipt({ receipt_number: "invalid receipt" }),
+      /valid Safaricom receipt/,
+    );
+  });
+  assert.deepEqual(sanitizeRejectReturnPayload({}), { rejection_reason: "Rejected by management" });
+
+  assert.throws(() => sanitizeReturnRequestPayload({ sale_id: "", reason: "Bad", items: [{ sale_item_id: "item-1", quantity: 0 }] }), /sale_id|quantity/i);
+  assert.throws(() => sanitizeApproveReturnPayload({ items_conditions: [{ return_item_id: "ret-1", condition: "invalid" }], refund_method: "cash" }), /condition/i);
+  assert.equal(
+    sanitizeApproveReturnPayload({ refund_method: "exchange" }).refund_method,
+    "exchange",
+  );
+  assert.throws(() => sanitizeRejectReturnPayload({ rejection_reason: ["bad"] }), /rejection_reason/i);
+});
+
+test("sanitizeSalePayload and sanitizeVoidSalePayload enforce trusted sale fields", () => {
+  assert.deepEqual(
+    sanitizeSalePayload({
+      items: [{ product_id: "prod-1", quantity: 2, malicious: "drop" }],
+      payment_method: "cash",
+      customer_id: "cust-1",
+      warehouse_id: "wh-1",
+      loyalty_discount: 12.5,
+      idempotency_key: "  key-123  ",
+      cash_amount: 100,
+      mpesa_amount: 0,
+      store_credit_amount: 0,
+      store_credit_barcode: "  SC-123  ",
+      admin_override: "drop",
+    }),
+    {
+      items: [{ product_id: "prod-1", quantity: 2 }],
+      payment_method: "cash",
+      customer_id: "cust-1",
+      warehouse_id: "wh-1",
+      loyalty_discount: 12.5,
+      idempotency_key: "key-123",
+      cash_amount: 100,
+      mpesa_amount: 0,
+      store_credit_amount: 0,
+      store_credit_barcode: "SC-123",
+    }
+  );
+
+  assert.deepEqual(
+    sanitizeSalePayload({
+      items: [{ product_id: "prod-1", quantity: 1 }],
+      customer_id: null,
+      warehouse_id: "warehouse-1",
+      store_credit_barcode: null,
+      cash_amount: 100,
+    }),
+    {
+      items: [{ product_id: "prod-1", quantity: 1 }],
+      warehouse_id: "warehouse-1",
+      cash_amount: 100,
+    },
+    "Walk-in cash sales may send null optional customer and store-credit fields",
+  );
+
+  assert.deepEqual(sanitizeVoidSalePayload({ reason: "  Customer cancelled  ", extra: "drop" }), {
+    reason: "Customer cancelled",
+  });
+
+  test("cash change is returned from tender and not counted as shift cash", () => {
+    assert.equal(calculateCashChange(150, 0, 0, 100), 50);
+    assert.equal(calculateCashChange(80, 30, 0, 100), 10);
+    assert.equal(calculateCashChange(80, 20, 0, 100), 0);
+    assert.equal(calculateCashChange(40, 0, 0, 40), 0);
+  });
+
+  test("sale payment method reflects all actual tender types", () => {
+    assert.equal(deriveSalePaymentMethod(20, 0, 0), "cash");
+    assert.equal(deriveSalePaymentMethod(0, 20, 0), "mpesa");
+    assert.equal(deriveSalePaymentMethod(0, 0, 20), "store_credit");
+    assert.equal(deriveSalePaymentMethod(20, 20, 0), "hybrid");
+    assert.equal(deriveSalePaymentMethod(20, 0, 20), "hybrid");
+    assert.equal(deriveSalePaymentMethod(0, 20, 20), "hybrid");
+    assert.throws(() => deriveSalePaymentMethod(0, 0, 0), /at least one payment tender/i);
+  });
+
+  assert.throws(() => sanitizeSalePayload({ items: [{ product_id: "prod-1", quantity: 0 }], payment_method: "bitcoin" }), /payment_method|quantity/i);
+  assert.throws(() => sanitizeVoidSalePayload({ reason: ["bad"] }), /reason/i);
+});
+
+test("sanitizeUserRolePayload, sanitizeTransferStatusPayload and sanitizeStockTakePayload validate trusted admin and inventory state updates", () => {
+  assert.deepEqual(sanitizeUserRolePayload({ role: "manager", extra: "drop" }), { role: "manager" });
+  assert.deepEqual(sanitizeTransferStatusPayload({ status: "completed", extra: "drop" }), { status: "completed" });
+  assert.deepEqual(sanitizeStockTakePayload({ warehouse_id: "wh-1", notes: "  Checked  ", extra: "drop" }), {
+    warehouse_id: "wh-1",
+    notes: "Checked",
+  });
+
+  assert.throws(() => sanitizeUserRolePayload({ role: "hacker" }), /role/i);
+  assert.throws(() => sanitizeTransferStatusPayload({ status: "fake" }), /status/i);
+  assert.throws(() => sanitizeStockTakePayload({ warehouse_id: "", notes: 123 as any }), /warehouse_id|notes/i);
+});
+
+test("sanitizeParkedSalePayload and sanitizeRequisitionStatusPayload validate remaining direct-write payloads", () => {
+  assert.deepEqual(
+    sanitizeParkedSalePayload({
+      items: [{ product_id: "prod-1", quantity: 2, extra: "drop" }],
+      customer_id: "  cust-1  ",
+      warehouse_id: "  wh-1  ",
+      extra: "drop",
+    }),
+    {
+      items: [{ product_id: "prod-1", quantity: 2 }],
+      customer_id: "cust-1",
+      warehouse_id: "wh-1",
+    }
+  );
+
+  assert.deepEqual(
+    sanitizeParkedSalePayload({
+      items: [{ product_id: "prod-1", quantity: 1 }],
+      customer_id: null,
+      warehouse_id: "",
+    }),
+    { items: [{ product_id: "prod-1", quantity: 1 }] },
+    "Walk-in sales and an unselected warehouse should omit optional IDs",
+  );
+
+  assert.deepEqual(sanitizeRequisitionStatusPayload({ status: "approved", extra: "drop" }), { status: "approved" });
+
+  assert.throws(() => sanitizeParkedSalePayload({ items: [{ product_id: "prod-1", quantity: 0 }] }), /quantity/i);
+  assert.throws(() => sanitizeRequisitionStatusPayload({ status: "bad-status" }), /status/i);
+});
+
+test("sanitizeLoyaltyMemberPayload and sanitizeLoyaltyPointsPayload validate direct loyalty writes", () => {
+  assert.deepEqual(
+    sanitizeLoyaltyMemberPayload({
+      customer_id: "  cust-1  ",
+      points: 150,
+      total_spent: 2500,
+      tier: "Gold",
+      extra: "drop",
+    }),
+    {
+      customer_id: "cust-1",
+      points: 150,
+      total_spent: 2500,
+      tier: "Gold",
+    }
+  );
+
+  assert.deepEqual(sanitizeLoyaltyPointsPayload({ points: 50, amount: 80, extra: "drop" }), { points: 50, amount: 80 });
+
+  assert.throws(() => sanitizeLoyaltyMemberPayload({ customer_id: "", points: -1, tier: "Hacker" }), /customer_id|points|tier/i);
+  assert.throws(() => sanitizeLoyaltyPointsPayload({ points: -5, amount: 10 }), /points/i);
+});
+
+test("sanitizePurchaseOrderCreatePayload, sanitizePurchaseOrderStatusPayload and sanitizeTaxClassPayload validate remaining write boundaries", () => {
+  assert.deepEqual(
+    sanitizePurchaseOrderCreatePayload({
+      vendor_id: "  vend-1  ",
+      warehouse_id: "  warehouse-1  ",
+      items: [
+        { product_id: "prod-1", quantity: 2, unit_cost: "150.00", extra: "drop" },
+        { product_id: "prod-2", quantity: 1, unit_cost: 80, extra: "drop" },
+      ],
+      extra: "drop",
+    }),
+    {
+      vendor_id: "vend-1",
+      warehouse_id: "warehouse-1",
+      items: [
+        { product_id: "prod-1", quantity: 2, unit_cost: 150 },
+        { product_id: "prod-2", quantity: 1, unit_cost: 80 },
+      ],
+    }
+  );
+
+  assert.deepEqual(sanitizePurchaseOrderStatusPayload({ status: "sent", extra: "drop" }), { status: "sent" });
+  assert.deepEqual(sanitizeTaxClassPayload({ name: "  GST  ", rate: 15, is_default: true, extra: "drop" }), {
+    name: "GST",
+    rate: 15,
+    is_default: true,
+  });
+  assert.deepEqual(sanitizeTaxClassUpdatePayload({ name: "  VAT  ", rate: 18, is_default: false, extra: "drop" }), {
+    name: "VAT",
+    rate: 18,
+    is_default: false,
+  });
+
+  assert.throws(() => sanitizePurchaseOrderCreatePayload({ vendor_id: "vend-1", warehouse_id: "warehouse-1", items: [{ product_id: "prod-1", quantity: 0, unit_cost: 10 }] }), /quantity/i);
+  assert.throws(() => sanitizePurchaseOrderStatusPayload({ status: "pirate" }), /status/i);
+  assert.throws(() => sanitizeTaxClassPayload({ name: "", rate: 120, is_default: false }), /name|rate/i);
+  assert.throws(() => sanitizeTaxClassUpdatePayload({ name: "", rate: 110 }), /name|rate/i);
+});
+
+test("sanitizeMpesaStkPayload rejects unsafe values and normalizes valid ones", () => {
+  assert.deepEqual(
+    sanitizeMpesaStkPayload({
+      phone_number: "  0712345678  ",
+      amount: "2500",
+      checkout_session_id: "550e8400-e29b-41d4-a716-446655440000",
+      items: [{ product_id: " prod-1 ", quantity: 2 }],
+      cash_amount: 10,
+      account_reference: "  Ref-42  ",
+      extra: "drop",
+    }),
+    {
+      phone_number: "254712345678",
+      amount: 2500,
+      checkout_session_id: "550e8400-e29b-41d4-a716-446655440000",
+      items: [{ product_id: "prod-1", quantity: 2 }],
+      loyalty_discount: 0,
+      cash_amount: 10,
+      store_credit_amount: 0,
+      warehouse_id: undefined,
+      account_reference: "Ref-42",
+    }
+  );
+
+  const validCheckout = {
+    phone_number: "0712345678",
+    amount: 100,
+    checkout_session_id: "550e8400-e29b-41d4-a716-446655440000",
+    items: [{ product_id: "prod-1", quantity: 1 }],
+  };
+  assert.throws(() => sanitizeMpesaStkPayload({ ...validCheckout, phone_number: "bad" }), /phone_number/i);
+  assert.throws(() => sanitizeMpesaStkPayload({ ...validCheckout, amount: "-10" }), /amount/i);
+  assert.throws(() => sanitizeMpesaStkPayload({ ...validCheckout, amount: 100.5 }), /whole number/i);
+  assert.throws(() => sanitizeMpesaStkPayload({ ...validCheckout, checkout_session_id: "invalid" }), /checkout_session_id/i);
+  assert.throws(() => sanitizeMpesaStkPayload({ ...validCheckout, items: [] }), /items/i);
+  assert.equal(
+    sanitizeMpesaStkPayload({ ...validCheckout, store_credit_barcode: " SC-123 " }).store_credit_barcode,
+    "SC-123",
+  );
+  assert.throws(
+    () => sanitizeMpesaStkPayload({ ...validCheckout, store_credit_barcode: "X".repeat(21) }),
+    /store_credit_barcode/i,
+  );
+});

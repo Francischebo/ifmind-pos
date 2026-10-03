@@ -1,15 +1,15 @@
-import { useEffect, useState } from 'react';
-import { supabase } from '@/integrations/supabase/client';
-import { toast } from 'sonner';
+import { useEffect, useState } from "react";
+import { ApiService } from "@/lib/api";
+import { toast } from "sonner";
 
 interface QueuedTransaction {
   id: string;
-  type: 'sale' | 'product' | 'customer';
+  type: "sale" | "product" | "customer";
   data: any;
   timestamp: number;
 }
 
-const QUEUE_KEY = 'ifmind_offline_queue';
+const QUEUE_KEY = "ifmind_offline_queue";
 
 export const useOfflineQueue = () => {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -20,7 +20,7 @@ export const useOfflineQueue = () => {
     return queue ? JSON.parse(queue) : [];
   };
 
-  const addToQueue = (type: 'sale' | 'product' | 'customer', data: any) => {
+  const addToQueue = (type: "sale" | "product" | "customer", data: any) => {
     const queue = getQueue();
     const transaction: QueuedTransaction = {
       id: crypto.randomUUID(),
@@ -30,7 +30,7 @@ export const useOfflineQueue = () => {
     };
     queue.push(transaction);
     localStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
-    toast.info('Transaction queued for sync when online');
+    toast.info("Transaction queued for sync when online");
   };
 
   const syncQueue = async () => {
@@ -45,26 +45,26 @@ export const useOfflineQueue = () => {
 
     for (const transaction of queue) {
       try {
-        let result;
+        let result: any;
         switch (transaction.type) {
-          case 'sale':
-            result = await supabase.from('sales').insert(transaction.data);
+          case "sale":
+            result = await ApiService.post("/sales", transaction.data);
             break;
-          case 'product':
-            result = await supabase.from('products').insert(transaction.data);
+          case "product":
+            result = await ApiService.post("/products", transaction.data);
             break;
-          case 'customer':
-            result = await supabase.from('customers').insert(transaction.data);
+          case "customer":
+            result = await ApiService.post("/customers", transaction.data);
             break;
         }
 
-        if (result?.error) {
+        if (result && result.error) {
           failedTransactions.push(transaction);
         } else {
           successCount++;
         }
       } catch (error) {
-        console.error('Sync error:', error);
+        console.error("Sync error:", error);
         failedTransactions.push(transaction);
       }
     }
@@ -91,12 +91,12 @@ export const useOfflineQueue = () => {
       setIsOnline(false);
     };
 
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
 
     return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
     };
   }, []);
 

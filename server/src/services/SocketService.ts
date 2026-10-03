@@ -2,13 +2,26 @@ import { Server as HttpServer } from "http";
 import { Server as SocketIOServer } from "socket.io";
 import * as jwt from "jsonwebtoken";
 
+const getJwtSecret = () => {
+    const jwtSecret = process.env.JWT_SECRET;
+    if (!jwtSecret) {
+        throw new Error("JWT_SECRET is not configured");
+    }
+    return jwtSecret;
+};
+
 export class SocketService {
     private static io: SocketIOServer;
 
     static init(server: HttpServer) {
+        const origins = (process.env.CORS_ORIGINS || process.env.FRONTEND_URL || "")
+            .split(",")
+            .map((origin) => origin.trim())
+            .filter(Boolean);
+
         this.io = new SocketIOServer(server, {
             cors: {
-                origin: process.env.FRONTEND_URL || "http://localhost:5173",
+                origin: origins,
                 methods: ["GET", "POST"]
             }
         });
@@ -21,7 +34,7 @@ export class SocketService {
             }
 
             try {
-                const decoded = jwt.verify(token, process.env.JWT_SECRET || "default_secret_key");
+                const decoded = jwt.verify(token, getJwtSecret());
                 (socket as any).user = decoded;
                 next();
             } catch (err) {
@@ -40,7 +53,11 @@ export class SocketService {
 
     static emitInventoryUpdated(productId: string, newStockLevel: number, warehouseId?: string) {
         if (this.io) {
-            this.io.emit("inventory_updated", { product_id: productId, stock_on_hand: newStockLevel, warehouse_id: warehouseId });
+            this.io.emit("inventory_updated", {
+                product_id: productId,
+                stock_on_hand: newStockLevel,
+                warehouse_id: warehouseId,
+            });
         }
     }
 

@@ -13,8 +13,8 @@ export class Profile {
     @Column()
     full_name: string;
 
-    @Column({ nullable: true })
-    phone_encrypted: string;
+    @Column({ type: "varchar", nullable: true })
+    phone_encrypted: string | null;
 
     @CreateDateColumn()
     created_at: Date;

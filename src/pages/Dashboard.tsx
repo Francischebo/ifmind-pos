@@ -1,8 +1,9 @@
 import { useEffect, useState, useRef } from 'react';
 import { ApiService } from '@/lib/api';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { DollarSign, ShoppingCart, Package, AlertCircle, TrendingUp, TrendingDown, Users } from 'lucide-react';
-import { useAuth } from '@/hooks/useAuth';
+import { DollarSign, ShoppingCart, Package, AlertCircle, TrendingUp } from 'lucide-react';
+import { useInventoryAlerts } from '@/hooks/useInventoryAlerts';
+import { Link } from 'react-router-dom';
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Legend, ResponsiveContainer } from 'recharts';
 import { Badge } from '@/components/ui/badge';
@@ -28,7 +29,7 @@ interface DashboardStats {
 }
 
 export default function Dashboard() {
-  const { user } = useAuth();
+  const { alerts: lowStockProducts, loading: lowStockLoading } = useInventoryAlerts();
   const [stats, setStats] = useState<DashboardStats>({
     todaySales: 0,
     todayTransactions: 0,
@@ -184,6 +185,59 @@ export default function Dashboard() {
           </CardContent>
         </Card>
       </div>
+
+      <Card>
+        <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <AlertCircle className="h-5 w-5 text-orange-500" />
+              Products at or below reorder level
+            </CardTitle>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {lowStockProducts.length} product{lowStockProducts.length === 1 ? '' : 's'} need attention
+            </p>
+          </div>
+          <Link to="/products" className="text-sm font-medium text-primary hover:underline">
+            View products
+          </Link>
+        </CardHeader>
+        <CardContent>
+          {lowStockLoading ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">Loading stock alerts...</p>
+          ) : lowStockProducts.length === 0 ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">
+              All products are above their reorder levels.
+            </p>
+          ) : (
+            <div className="max-h-80 overflow-y-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Product</TableHead>
+                    <TableHead>SKU</TableHead>
+                    <TableHead className="text-right">Available</TableHead>
+                    <TableHead className="text-right">Reorder level</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {lowStockProducts.map((product) => (
+                    <TableRow key={product.id}>
+                      <TableCell className="font-medium">{product.name}</TableCell>
+                      <TableCell>{product.sku}</TableCell>
+                      <TableCell className="text-right font-semibold text-orange-600">
+                        {Number(product.stock_on_hand).toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {Number(product.reorder_level).toLocaleString()}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Charts Section */}
       <div className="grid gap-6 lg:grid-cols-2">

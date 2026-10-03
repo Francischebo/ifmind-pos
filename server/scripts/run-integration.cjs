@@ -1,0 +1,158 @@
+require("dotenv").config();
+
+const { Client } = require("pg");
+const { spawnSync } = require("child_process");
+const { randomBytes, randomUUID } = require("crypto");
+const assert = require("node:assert/strict");
+const { existsSync, readFileSync } = require("fs");
+const path = require("path");
+
+const rootEnvironmentPath = path.resolve(process.cwd(), "../.env");
+if (existsSync(rootEnvironmentPath)) {
+    const rootEnvironment = require("dotenv").parse(readFileSync(rootEnvironmentPath));
+    if (!process.env.ENCRYPTION_KEY && rootEnvironment.ENCRYPTION_KEY) {
+        process.env.ENCRYPTION_KEY = rootEnvironment.ENCRYPTION_KEY;
+    }
+}
+
+const run = async () => {
+    if (!process.env.DATABASE_URL) {
+        throw new Error("DATABASE_URL is required to create an isolated integration database.");
+    }
+    if (!process.env.ENCRYPTION_KEY || !/^[0-9a-fA-F]{64}$/.test(process.env.ENCRYPTION_KEY)) {
+        throw new Error("ENCRYPTION_KEY must be configured as 64 hexadecimal characters before integration tests run.");
+    }
+
+    const configuredDatabaseUrl = new URL(process.env.DATABASE_URL);
+    const isLocalDatabase = ["localhost", "127.0.0.1", "::1"].includes(configuredDatabaseUrl.hostname);
+    if (!isLocalDatabase && process.env.ALLOW_REMOTE_INTEGRATION_DB !== "true") {
+        throw new Error("Refusing to create a temporary database on a remote host without ALLOW_REMOTE_INTEGRATION_DB=true.");
+    }
+
+    const databaseName = `pos_integration_test_${Date.now()}_${randomUUID().slice(0, 8)}`;
+    const admin = new Client({ connectionString: process.env.DATABASE_URL });
+    let databaseCreated = false;
+    let exitCode = 1;
+
+    try {
+        await admin.connect();
+        await admin.query(`CREATE DATABASE "${databaseName}"`);
+        databaseCreated = true;
+
+        const testDatabaseUrl = new URL(configuredDatabaseUrl);
+        testDatabaseUrl.pathname = `/${databaseName}`;
+        const legacyKey = randomBytes(16).toString("hex");
+
+        const migrationClient = new Client({
+            connectionString: testDatabaseUrl.toString(),
+            options: `-c app.encryption_key=${process.env.ENCRYPTION_KEY} -c app.legacy_encryption_key=${legacyKey}`,
+        });
+        try {
+            await migrationClient.connect();
+            await migrationClient.query("CREATE EXTENSION IF NOT EXISTS pgcrypto");
+            await migrationClient.query("CREATE TABLE public.customers (phone TEXT, phone_encrypted TEXT)");
+            await migrationClient.query("CREATE TABLE public.mpesa_transactions (phone_number TEXT, phone_encrypted TEXT)");
+            await migrationClient.query("CREATE TABLE public.audit_logs (old_values JSONB, new_values JSONB)");
+            await migrationClient.query("CREATE TABLE public.offline_transaction_queue (encrypted_data TEXT)");
+
+            const legacyCustomerPhone = "254700000001";
+            const legacyMpesaPhone = "254700000002";
+            const legacyAuditPhone = "254700000003";
+            const legacyOfflineData = JSON.stringify({ type: "sale", marker: randomUUID() });
+            const encryptLegacy = async (plaintext) => {
+                const result = await migrationClient.query(
+                    "SELECT encode(encrypt(convert_to($1, 'UTF8'), convert_to(rpad($2, 32, '0'), 'UTF8'), 'aes'), 'hex') AS ciphertext",
+                    [plaintext, legacyKey]
+                );
+                return result.rows[0].ciphertext;
+            };
+
+            await migrationClient.query("INSERT INTO public.customers (phone) VALUES ($1)", [legacyCustomerPhone]);
+            await migrationClient.query("INSERT INTO public.mpesa_transactions (phone_number) VALUES ($1)", [legacyMpesaPhone]);
+            await migrationClient.query(
+                "INSERT INTO public.audit_logs (old_values) VALUES (jsonb_build_object('phone_encrypted', $1::text))",
+                [await encryptLegacy(legacyAuditPhone)]
+            );
+            await migrationClient.query(
+                "INSERT INTO public.offline_transaction_queue (encrypted_data) VALUES ($1)",
+                [await encryptLegacy(legacyOfflineData)]
+            );
+
+            const encryptionMigrationPath = path.resolve(
+                process.cwd(),
+                "../supabase/migrations/20261001000000_require_encryption_key_setting.sql"
+            );
+            await migrationClient.query(readFileSync(encryptionMigrationPath, "utf8"));
+
+            const rekeyed = await migrationClient.query(`
+                SELECT
+                    (SELECT public.decrypt_sensitive_data(phone_encrypted) FROM public.customers LIMIT 1) AS customer_phone,
+                    (SELECT public.decrypt_sensitive_data(phone_encrypted) FROM public.mpesa_transactions LIMIT 1) AS mpesa_phone,
+                    (SELECT public.decrypt_sensitive_data(old_values->>'phone_encrypted') FROM public.audit_logs LIMIT 1) AS audit_phone,
+                    (SELECT public.decrypt_sensitive_data(encrypted_data) FROM public.offline_transaction_queue LIMIT 1) AS offline_data
+            `);
+            assert.equal(rekeyed.rows[0].customer_phone, legacyCustomerPhone);
+            assert.equal(rekeyed.rows[0].mpesa_phone, legacyMpesaPhone);
+            assert.equal(rekeyed.rows[0].audit_phone, legacyAuditPhone);
+            assert.equal(rekeyed.rows[0].offline_data, legacyOfflineData);
+            await migrationClient.query(`
+                DROP TABLE public.customers;
+                DROP TABLE public.mpesa_transactions;
+                DROP TABLE public.audit_logs;
+                DROP TABLE public.offline_transaction_queue;
+            `);
+        } finally {
+            await migrationClient.end().catch(() => {});
+        }
+
+        const testEnvironment = {
+            ...process.env,
+            TEST_DATABASE_URL: testDatabaseUrl.toString(),
+        };
+
+        const apiResult = spawnSync(
+            process.execPath,
+            ["--require", "ts-node/register", "--test", "src/tests/business-workflow.integration.test.ts"],
+            { cwd: process.cwd(), stdio: "inherit", env: testEnvironment }
+        );
+        if (apiResult.error) throw apiResult.error;
+        exitCode = apiResult.status ?? 1;
+
+        if (exitCode === 0) {
+            const erpResult = spawnSync(
+                process.execPath,
+                ["--require", "ts-node/register", "src/tests/erp-integration.ts"],
+                {
+                    cwd: process.cwd(),
+                    stdio: "inherit",
+                    env: {
+                        ...testEnvironment,
+                        DATABASE_URL: testDatabaseUrl.toString(),
+                        TYPEORM_SYNCHRONIZE: "true",
+                    },
+                }
+            );
+            if (erpResult.error) throw erpResult.error;
+            exitCode = erpResult.status ?? 1;
+        }
+    } catch (error) {
+        console.error("Integration test run failed:", error.message);
+    } finally {
+        if (databaseCreated) {
+            try {
+                await admin.query(`DROP DATABASE "${databaseName}"`);
+            } catch (error) {
+                console.error("Could not drop temporary integration database:", error.message);
+                exitCode = 1;
+            }
+        }
+        await admin.end().catch(() => {});
+    }
+
+    process.exitCode = exitCode;
+};
+
+run().catch((error) => {
+    console.error("Integration test run failed:", error.message);
+    process.exitCode = 1;
+});

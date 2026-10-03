@@ -64,14 +64,23 @@ export class Sale {
     @Column("decimal", { precision: 10, scale: 2, default: 0 })
     mpesa_amount: number;
 
+    @Column({ type: "varchar", default: "pending" })
+    payment_status: string;
+
+    @Column("decimal", { precision: 10, scale: 2, default: 0 })
+    change_amount: number;
+
     @Column("decimal", { precision: 10, scale: 2, default: 0 })
     store_credit_amount: number;
+
+    @Column({ type: "varchar", length: 20, nullable: true })
+    store_credit_barcode: string | null;
 
     @Column("decimal", { precision: 10, scale: 2, default: 0 })
     loyalty_discount: number;
 
-    @Column({ nullable: true })
-    idempotency_key: string;
+    @Column({ type: "varchar", nullable: true })
+    idempotency_key: string | null;
 
     // Pesapal Integration fields
     @Column({ nullable: true })

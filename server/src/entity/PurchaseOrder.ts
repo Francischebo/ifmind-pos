@@ -2,6 +2,7 @@ import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateCol
 import { Vendor } from "./Vendor";
 import { PoItem } from "./PoItem";
 import { User } from "./User";
+import { Warehouse } from "./Warehouse";
 
 @Entity("purchase_orders")
 export class PurchaseOrder {
@@ -17,6 +18,13 @@ export class PurchaseOrder {
     @ManyToOne(() => Vendor, vendor => vendor.purchase_orders)
     @JoinColumn({ name: "vendor_id" })
     vendor: Vendor;
+
+    @Column({ nullable: true })
+    warehouse_id: string | null;
+
+    @ManyToOne(() => Warehouse, { nullable: true })
+    @JoinColumn({ name: "warehouse_id" })
+    warehouse: Warehouse | null;
 
     @Column({ default: 'draft' })
     status: string;

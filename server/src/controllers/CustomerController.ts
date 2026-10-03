@@ -4,6 +4,44 @@ import { Customer } from "../entity/Customer";
 
 const customerRepository = AppDataSource.getRepository(Customer);
 
+const CUSTOMER_ALLOWED_FIELDS = new Set([
+    "name",
+    "phone",
+    "email",
+    "total_purchases",
+    "purchase_count",
+    "is_frequent",
+    "credit_limit",
+    "credit_balance",
+    "store_credit_balance",
+]);
+
+export const sanitizeCustomerPayload = (input: unknown) => {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+        return {} as Record<string, any>;
+    }
+
+    const sanitized: Record<string, any> = {};
+    for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+        if (!CUSTOMER_ALLOWED_FIELDS.has(key) || value === undefined || value === null) {
+            continue;
+        }
+
+        if (typeof value === "string") {
+            const trimmed = value.trim();
+            if (trimmed === "" && (key === "name" || key === "phone")) continue;
+            sanitized[key] = trimmed;
+            continue;
+        }
+
+        if (typeof value === "number" || typeof value === "boolean") {
+            sanitized[key] = value;
+        }
+    }
+
+    return sanitized;
+};
+
 export class CustomerController {
     static async getAllCustomers(req: Request, res: Response) {
         try {
@@ -30,8 +68,13 @@ export class CustomerController {
 
     static async createCustomer(req: Request, res: Response) {
         try {
-            const { name, phone, email } = req.body;
-            
+            const payload = sanitizeCustomerPayload(req.body);
+            const { name, phone, email } = payload;
+
+            if (!name || !phone) {
+                return res.status(400).json({ message: "Customer name and phone are required" });
+            }
+
             const existing = await customerRepository.findOneBy({ phone });
             if (existing) {
                 return res.status(400).json({ message: "Customer with this phone number already exists" });
@@ -51,7 +94,7 @@ export class CustomerController {
             const customer = await customerRepository.findOneBy({ id: req.params.id as string });
             if (!customer) return res.status(404).json({ message: "Customer not found" });
 
-            customerRepository.merge(customer, req.body);
+            customerRepository.merge(customer, sanitizeCustomerPayload(req.body));
             const results = await customerRepository.save(customer);
             res.json(results);
         } catch (error) {

@@ -1,4 +1,10 @@
-import { validatePhoneNumber, secureApiCall, paymentRateLimiter, apiRateLimiter, validateAmount } from '@/lib/security';
+import {
+  validatePhoneNumber,
+  secureApiCall,
+  paymentRateLimiter,
+  apiRateLimiter,
+  validateAmount,
+} from "@/lib/security";
 import {
   Table,
   TableBody,
@@ -6,34 +12,49 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table';
+} from "@/components/ui/table";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select';
-import { BarcodeScanner } from '@/components/BarcodeScanner';
-import { Receipt } from '@/components/Receipt';
-import { Badge } from '@/components/ui/badge';
-import { HybridPaymentPanel } from '@/components/HybridPaymentPanel';
-import { useHybridPayment } from '@/hooks/useHybridPayment';
-import { useLoyaltyPoints } from '@/hooks/useLoyaltyPoints';
-import { ApiService } from '@/lib/api';
-import { LoyaltyRedemption } from '@/components/LoyaltyRedemption';
-import { useAuth } from '@/hooks/useAuth';
-import { useWebSockets } from '@/hooks/useWebSockets';
-import { useState, useEffect, useRef } from 'react';
-import { supabase } from '@/integrations/supabase/client';
-import { ShoppingCart, Package, Search, Trash2, Minus, Plus, PauseCircle, PlayCircle } from 'lucide-react';
-import { Input } from '@/components/ui/input';
-import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
-import { toast } from 'sonner';
-import { Button } from '@/components/ui/button';
-import { Label } from '@/components/ui/label';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { printerService } from '@/lib/hardware/escpos';
+} from "@/components/ui/select";
+import { BarcodeScanner } from "@/components/BarcodeScanner";
+import { Receipt } from "@/components/Receipt";
+import { Badge } from "@/components/ui/badge";
+import { HybridPaymentPanel } from "@/components/HybridPaymentPanel";
+import { useHybridPayment } from "@/hooks/useHybridPayment";
+import { useLoyaltyPoints } from "@/hooks/useLoyaltyPoints";
+import { ApiService } from "@/lib/api";
+import { LoyaltyRedemption } from "@/components/LoyaltyRedemption";
+import { useAuth } from "@/hooks/useAuth";
+import { useWebSockets } from "@/hooks/useWebSockets";
+import { useState, useEffect, useRef } from "react";
+import {
+  ShoppingCart,
+  Package,
+  Search,
+  Trash2,
+  Minus,
+  Plus,
+  PauseCircle,
+  PlayCircle,
+} from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { printerService } from "@/lib/hardware/escpos";
 
 interface Warehouse {
   id: string;
@@ -60,12 +81,37 @@ interface Customer {
   id: string;
   name: string;
   phone: string;
+  store_credit_balance: number;
+}
+
+interface MpesaPaymentConfig {
+  paybill_number: string | null;
+  paybill_c2b_enabled: boolean;
+  stk_push_enabled?: boolean;
+  stk_push_issues?: string[];
+}
+
+interface ParkedSaleItem {
+  quantity: number;
+  unit_price: number;
+  tax_rate: number;
+  line_total: number;
+  product: Product;
+}
+
+interface ParkedSale {
+  id: string;
+  created_at: string;
+  customer: Customer | null;
+  warehouse: Warehouse | null;
+  loyalty_discount: number;
+  items: ParkedSaleItem[];
 }
 
 export default function Sales() {
   const { user } = useAuth();
   const { awardLoyaltyPoints, redeemLoyaltyPoints } = useLoyaltyPoints();
-  
+
   // Generate unique invoice number
   const generateInvoiceNumber = async () => {
     // Invoices should naturally be assigned by backend during generation
@@ -74,17 +120,25 @@ export default function Sales() {
   const [products, setProducts] = useState<Product[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
-  const [searchTerm, setSearchTerm] = useState('');
+  const [mpesaConfig, setMpesaConfig] = useState<MpesaPaymentConfig>({
+    paybill_number: null,
+    paybill_c2b_enabled: false,
+    stk_push_enabled: undefined,
+    stk_push_issues: [],
+  });
+  const [searchTerm, setSearchTerm] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [selectedCustomer, setSelectedCustomer] = useState<string>('walk-in');
-  const [selectedWarehouse, setSelectedWarehouse] = useState<string>('');
+  const [selectedCustomer, setSelectedCustomer] = useState<string>("walk-in");
+  const [selectedWarehouse, setSelectedWarehouse] = useState<string>("");
   const [loading, setLoading] = useState(false);
+  const [showOpenShiftDialog, setShowOpenShiftDialog] = useState(false);
+  const [openingFloat, setOpeningFloat] = useState("");
+  const [openingShift, setOpeningShift] = useState(false);
   const [completedSaleId, setCompletedSaleId] = useState<string | null>(null);
-  const [currentSaleId, setCurrentSaleId] = useState<string | null>(null);
-  const [parkedSales, setParkedSales] = useState<any[]>([]);
+  const [parkedSales, setParkedSales] = useState<ParkedSale[]>([]);
   const [showParkedModal, setShowParkedModal] = useState(false);
   const barcodeInputRef = useRef<HTMLInputElement>(null);
-  
+
   // Loyalty redemption state
   const [loyaltyDiscount, setLoyaltyDiscount] = useState(0);
   const [loyaltyPointsToRedeem, setLoyaltyPointsToRedeem] = useState(0);
@@ -96,28 +150,142 @@ export default function Sales() {
 
   useWebSockets({
     onInventoryUpdated: (data) => {
-      if (data.warehouse_id && selectedWarehouse && data.warehouse_id !== selectedWarehouse) return;
-      
-      setProducts(prev => prev.map(p => 
-        p.id === data.product_id ? { ...p, stock_on_hand: data.stock_on_hand } : p
-      ));
-    }
+      if (
+        data.warehouse_id &&
+        selectedWarehouse &&
+        data.warehouse_id !== selectedWarehouse
+      )
+        return;
+
+      setProducts((prev) =>
+        prev.map((p) =>
+          p.id === data.product_id
+            ? { ...p, stock_on_hand: data.stock_on_hand }
+            : p,
+        ),
+      );
+    },
   });
 
   function getTotalAmount() {
     return parseFloat(calculateTotals().total);
   }
-  
-  const payment = useHybridPayment(currentSaleId, getTotalAmount());
+
+  const payment = useHybridPayment(getTotalAmount(), user?.id || "unknown");
+  const restoredCheckoutIdRef = useRef("");
+
+  useEffect(() => {
+    if (
+      !payment.checkoutReserved ||
+      restoredCheckoutIdRef.current === payment.checkoutSessionId
+    ) {
+      return;
+    }
+    const sessionId = payment.checkoutSessionId;
+    restoredCheckoutIdRef.current = sessionId;
+    void ApiService.get<{
+      id: string;
+      status: "reserved" | "completed" | "cancelled";
+      warehouse_id: string | null;
+      customer_id: string | null;
+      loyalty_discount: number;
+      items: Array<{
+        product_id: string;
+        quantity: number;
+        unit_price: number;
+        tax_rate: number;
+        sku: string;
+        barcode: string | null;
+        name: string;
+      }>;
+      mpesa_transactions: Array<{
+        id: string;
+        status: string;
+        amount: number;
+        mpesa_receipt_number: string | null;
+        checkout_request_id: string | null;
+        account_reference: string | null;
+      }>;
+      total_amount: number;
+      cash_amount: number;
+      store_credit_amount: number;
+      store_credit_barcode: string | null;
+    }>(`/sales/checkouts/${sessionId}`)
+      .then((session) => {
+        if (session.status !== "reserved") {
+          payment.reset();
+          return;
+        }
+        setCart(session.items.map((item) => {
+          const currentProduct = products.find((product) => product.id === item.product_id);
+          return {
+            id: item.product_id,
+            sku: item.sku,
+            barcode: item.barcode,
+            name: item.name,
+            retail_price: Number(item.unit_price),
+            tax_rate: Number(item.tax_rate),
+            stock_on_hand: currentProduct?.stock_on_hand ?? item.quantity,
+            quantity: item.quantity,
+            lineTotal: Number(item.unit_price) * item.quantity,
+          };
+        }));
+        setSelectedWarehouse(session.warehouse_id || "");
+        setSelectedCustomer(session.customer_id || "walk-in");
+        setLoyaltyDiscount(Number(session.loyalty_discount) || 0);
+        payment.restoreCheckoutSession(session);
+      })
+      .catch((error) => {
+        console.error("Unable to recover reserved checkout:", error);
+        payment.finishCheckoutRecovery();
+        if (
+          error instanceof Error &&
+          error.message.toLowerCase().includes("checkout session not found")
+        ) {
+          const hasCurrentCart = cart.length > 0;
+          if (hasCurrentCart) {
+            payment.clearMissingCheckout();
+          } else {
+            payment.reset();
+          }
+          toast.info("The previous checkout reservation is no longer active", {
+            description: hasCurrentCart
+              ? "Your cart and entered payment amounts are still available."
+              : "The stale checkout and its saved payment amounts were cleared.",
+          });
+          return;
+        }
+        toast.error("Could not recover the reserved checkout", {
+          description: error instanceof Error ? error.message : "Refresh and try again",
+        });
+      });
+  }, [
+    payment.checkoutReserved,
+    payment.checkoutSessionId,
+    payment.clearMissingCheckout,
+    payment.finishCheckoutRecovery,
+    payment.reset,
+    payment.restoreCheckoutSession,
+    cart.length,
+    products,
+  ]);
 
   // Reset loyalty discount when customer changes
   const handleCustomerChange = (customerId: string) => {
+    if (payment.checkoutReserved) {
+      toast.error("Release the reserved checkout before changing its customer");
+      return;
+    }
     setSelectedCustomer(customerId);
     setLoyaltyDiscount(0);
     setLoyaltyPointsToRedeem(0);
   };
 
   const handleLoyaltyDiscount = (discount: number, pointsUsed: number) => {
+    if (payment.checkoutReserved) {
+      toast.error("Release the reserved checkout before changing its discount");
+      return;
+    }
     setLoyaltyDiscount(discount);
     setLoyaltyPointsToRedeem(pointsUsed);
   };
@@ -125,6 +293,7 @@ export default function Sales() {
   useEffect(() => {
     loadWarehouses();
     loadCustomers();
+    loadMpesaConfig();
     barcodeInputRef.current?.focus();
   }, []);
 
@@ -134,88 +303,136 @@ export default function Sales() {
 
   const loadWarehouses = async () => {
     try {
-      const data = await ApiService.get<Warehouse[]>('/warehouses');
+      const data = await ApiService.get<Warehouse[]>("/warehouses");
       if (data && data.length > 0) {
         setWarehouses(data);
         setSelectedWarehouse(data[0].id);
       }
     } catch (e: any) {
-      console.warn('Failed to load warehouses');
+      console.warn("Failed to load warehouses");
     }
   };
 
   const loadProducts = async (warehouseId?: string) => {
     try {
-      const endpoint = warehouseId ? `/products?warehouse_id=${warehouseId}` : '/products';
+      const endpoint = warehouseId
+        ? `/products?warehouse_id=${warehouseId}`
+        : "/products";
       const data = await ApiService.get<Product[]>(endpoint);
       setProducts(data || []);
     } catch (e: any) {
-      toast.error('Failed to load products: ' + e.message);
+      toast.error("Failed to load products: " + e.message);
     }
   };
 
   const loadCustomers = async () => {
     try {
-      const data = await ApiService.get<Customer[]>('/customers');
+      const data = await ApiService.get<Customer[]>("/customers");
       setCustomers(data || []);
     } catch (e: any) {
-      console.warn('Customers endpoint not ready yet');
+      console.warn("Customers endpoint not ready yet");
       setCustomers([]);
     }
   };
 
+  const loadMpesaConfig = async () => {
+    try {
+      const config = await ApiService.get<MpesaPaymentConfig>("/payments/mpesa/config");
+      setMpesaConfig(config);
+    } catch (error) {
+      console.error("Failed to load M-Pesa payment configuration:", error);
+    }
+  };
+
   const handleBarcodeInput = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
+    if (e.key === "Enter") {
       const barcode = e.currentTarget.value.trim();
       if (barcode) {
         handleBarcodeScanned(barcode);
-        e.currentTarget.value = '';
+        e.currentTarget.value = "";
       }
     }
   };
 
   const handleBarcodeScanned = (barcode: string) => {
-    const product = products.find(
-      (p) =>
-        p.barcode === barcode ||
-        p.sku.toLowerCase() === barcode.toLowerCase()
-    );
+    if (payment.checkoutReserved) {
+      toast.error("Finish or release the reserved checkout before adding products");
+      return;
+    }
+    const scannedCode = barcode.trim();
+    const product = products.find((p) => {
+      if (
+        p.barcode === scannedCode ||
+        p.sku.toLowerCase() === scannedCode.toLowerCase()
+      ) {
+        return true;
+      }
+
+      return (
+        /^\d{12}$/.test(scannedCode) &&
+        /^0\d{12}$/.test(p.barcode || "") &&
+        p.barcode?.slice(1) === scannedCode
+      );
+    });
 
     if (product) {
       addToCart(product);
       toast.success(`Added ${product.name} to cart`);
     } else {
-      toast.error('Product not found');
+      toast.error("Product not found");
     }
   };
 
   const filteredProducts = products.filter(
     (p) =>
-      (p.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (p.sku || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (p.barcode && p.barcode.includes(searchTerm))
+      (p.name || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (p.sku || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (p.barcode && p.barcode.includes(searchTerm)),
   );
 
   const addToCart = (product: Product) => {
-    if (product.stock_on_hand <= 0) {
-      toast.error('Product out of stock');
+    if (payment.checkoutReserved) {
+      toast.error("Finish or release the reserved checkout before changing its items");
+      return;
+    }
+    const cartProduct = {
+      ...product,
+      retail_price: Number(product.retail_price),
+      tax_rate: Number(product.tax_rate),
+      stock_on_hand: Number(product.stock_on_hand),
+    };
+
+    if (
+      !Number.isFinite(cartProduct.retail_price) ||
+      !Number.isFinite(cartProduct.tax_rate) ||
+      !Number.isFinite(cartProduct.stock_on_hand)
+    ) {
+      toast.error(
+        "Product information is invalid. Please refresh the product list.",
+      );
+      return;
+    }
+
+    if (cartProduct.stock_on_hand <= 0) {
+      toast.error("Product out of stock");
       return;
     }
 
     const existing = cart.find((item) => item.id === product.id);
     if (existing) {
-      if (existing.quantity >= product.stock_on_hand) {
-        toast.error('Cannot exceed available stock');
+      if (existing.quantity >= cartProduct.stock_on_hand) {
+        toast.error("Cannot exceed available stock");
         return;
       }
       updateQuantity(product.id, existing.quantity + 1);
     } else {
-      const lineTotal = Number(product.retail_price);
-      setCart([...cart, { ...product, quantity: 1, lineTotal }]);
+      const lineTotal = cartProduct.retail_price;
+      setCart([...cart, { ...cartProduct, quantity: 1, lineTotal }]);
     }
   };
 
   const updateQuantity = (productId: string, newQuantity: number) => {
+    if (payment.checkoutReserved) return;
     setCart(
       cart.map((item) =>
         item.id === productId
@@ -224,21 +441,26 @@ export default function Sales() {
               quantity: newQuantity,
               lineTotal: item.retail_price * newQuantity,
             }
-          : item
-      )
+          : item,
+      ),
     );
   };
 
   const removeFromCart = (productId: string) => {
+    if (payment.checkoutReserved) return;
     setCart(cart.filter((item) => item.id !== productId));
   };
 
   function calculateTotals() {
-    const subtotal = cart.reduce((sum, item) => sum + Number(item.lineTotal), 0);
+    const subtotal = cart.reduce(
+      (sum, item) => sum + Number(item.lineTotal),
+      0,
+    );
     const subtotalWithDiscount = Math.max(0, subtotal - loyaltyDiscount);
     const taxAmount = cart.reduce(
-      (sum, item) => sum + (Number(item.lineTotal) * Number(item.tax_rate)) / 100,
-      0
+      (sum, item) =>
+        sum + (Number(item.lineTotal) * Number(item.tax_rate)) / 100,
+      0,
     );
     return {
       subtotal: subtotal.toFixed(2),
@@ -248,35 +470,26 @@ export default function Sales() {
     };
   }
 
-  const createPendingSale = async (paymentMethod: 'cash' | 'mpesa' | 'hybrid' = 'cash') => {
-    if (!user?.id || currentSaleId) return null;
-    
-    // The backend will generate the "pending" ticket via the unified endpoint later,
-    // so we utilize a temporary local ticket boundary.
-    const tempSaleId = `temp_${Date.now()}`;
-    setCurrentSaleId(tempSaleId);
-    return tempSaleId;
-  };
-
   const parkSale = async () => {
     if (cart.length === 0) return;
     setLoading(true);
     try {
-      const items = cart.map(item => ({
+      const items = cart.map((item) => ({
         product_id: item.id,
         quantity: item.quantity,
       }));
-      await ApiService.post('/sales/park', {
-        customer_id: selectedCustomer === 'walk-in' ? null : selectedCustomer,
+      await ApiService.post("/sales/park", {
+        customer_id: selectedCustomer === "walk-in" ? null : selectedCustomer,
         warehouse_id: selectedWarehouse,
-        items
+        loyalty_discount: loyaltyDiscount,
+        items,
       });
-      toast.success('Sale parked successfully');
+      toast.success("Sale parked successfully");
       setCart([]);
-      setSelectedCustomer('walk-in');
+      setSelectedCustomer("walk-in");
       payment.reset();
     } catch (e: any) {
-      toast.error('Failed to park sale: ' + e.message);
+      toast.error("Failed to park sale: " + e.message);
     } finally {
       setLoading(false);
     }
@@ -284,76 +497,119 @@ export default function Sales() {
 
   const fetchParkedSales = async () => {
     try {
-      const data = await ApiService.get<any[]>('/sales/parked');
+      const data = await ApiService.get<ParkedSale[]>("/sales/parked");
       setParkedSales(data);
       setShowParkedModal(true);
     } catch (e: any) {
-      toast.error('Failed to load parked sales');
+      toast.error("Failed to load parked sales: " + e.message);
     }
   };
 
-  const retrieveParkedSale = (parkedSale: any) => {
-    const loadedCart: CartItem[] = parkedSale.items.map((item: any) => ({
-      id: item.product.id,
-      sku: item.product.sku,
-      barcode: item.product.barcode,
-      name: item.product.name,
-      retail_price: item.product.retail_price,
-      tax_rate: item.product.tax_rate,
-      stock_on_hand: item.product.stock_on_hand,
-      quantity: item.quantity,
-      lineTotal: item.line_total
+  const retrieveParkedSale = (parkedSale: ParkedSale) => {
+    if (!Array.isArray(parkedSale.items) || parkedSale.items.length === 0) {
+      toast.error("This saved sale has no items and cannot be resumed.");
+      return;
+    }
+
+    const loadedCart: CartItem[] = parkedSale.items.map((item) => ({
+      ...item.product,
+      retail_price: Number(item.unit_price),
+      tax_rate: Number(item.tax_rate),
+      stock_on_hand: Number(item.product.stock_on_hand),
+      quantity: Number(item.quantity),
+      lineTotal: Number(item.line_total),
     }));
+    payment.reset();
     setCart(loadedCart);
-    setSelectedCustomer(parkedSale.customer ? parkedSale.customer.id : 'walk-in');
+    setSelectedCustomer(
+      parkedSale.customer ? parkedSale.customer.id : "walk-in",
+    );
+    setSelectedWarehouse(parkedSale.warehouse?.id || "");
+    setLoyaltyDiscount(Number(parkedSale.loyalty_discount) || 0);
+    setLoyaltyPointsToRedeem(0);
     setShowParkedModal(false);
-    toast.success('Parked sale loaded');
+    toast.success("Parked sale loaded");
   };
 
   const completeSale = async () => {
     if (cart.length === 0) {
-      toast.error('Cart is empty');
+      toast.error("Cart is empty");
       return;
     }
 
     if (!payment.isFullyPaid) {
-      toast.error('Payment not complete');
+      toast.error("Payment not complete");
       return;
     }
 
     setLoading(true);
     try {
-      // Generate idempotency key
-      const idempotencyKey = `sale_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      try {
+        const shift = await ApiService.get<{ id: string }>("/shifts/current");
+        if (!shift?.id) {
+          setShowOpenShiftDialog(true);
+          return;
+        }
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          error.message.toLowerCase().includes("no open shift found")
+        ) {
+          setShowOpenShiftDialog(true);
+          return;
+        }
+        throw error;
+      }
+
+      const idempotencyKey = `sale_${payment.checkoutSessionId}`;
 
       // Prepare items for server-side processing
       const currentTotals = calculateTotals();
-      const items = cart.map(item => ({
+      const items = cart.map((item) => ({
         product_id: item.id,
         quantity: item.quantity,
         unit_price: item.retail_price,
-        tax_rate: item.tax_rate
+        tax_rate: item.tax_rate,
       }));
 
       // Use server-side secure sale creation
-      const saleResult = await ApiService.post<any>('/sales', {
-        customer_id: selectedCustomer === 'walk-in' ? null : selectedCustomer,
+      const saleResult = await ApiService.post<any>("/sales", {
+        customer_id: selectedCustomer === "walk-in" ? null : selectedCustomer,
         warehouse_id: selectedWarehouse,
-        payment_method: payment.cashAmount > 0 && payment.mpesaAmount > 0 ? 'hybrid' :
-                         payment.cashAmount > 0 ? 'cash' : 'mpesa',
+        payment_method:
+          [payment.cashAmount, payment.mpesaAmount, payment.storeCreditAmount].filter(
+            (amount) => amount > 0,
+          ).length > 1
+            ? "hybrid"
+            : payment.cashAmount > 0
+              ? "cash"
+              : payment.mpesaAmount > 0
+                ? "mpesa"
+                : "store_credit",
         items: items,
         loyalty_discount: loyaltyDiscount,
         idempotency_key: idempotencyKey,
         cash_amount: payment.cashAmount,
         mpesa_amount: payment.mpesaAmount,
+        ...(payment.checkoutReserved
+          ? { checkout_session_id: payment.checkoutSessionId }
+          : {}),
+        ...(payment.mpesaAmount > 0
+          ? {
+              mpesa_transaction_ids: payment.mpesaTransactionIds,
+            }
+          : {}),
         store_credit_amount: payment.storeCreditAmount,
         store_credit_barcode: payment.storeCreditBarcode,
         subtotal: parseFloat(currentTotals.subtotal),
         tax_amount: parseFloat(currentTotals.taxAmount),
-        total_amount: parseFloat(currentTotals.total)
+        total_amount: parseFloat(currentTotals.total),
       });
 
-      const saleId = saleResult.id;
+      const saleId = saleResult.id || saleResult.sale?.id;
+      if (!saleId) {
+        throw new Error("Sale was processed but its receipt ID was not returned. Check Sales History before retrying.");
+      }
 
       // Kick Cash Drawer if cash is involved
       if (payment.cashAmount > 0) {
@@ -361,76 +617,135 @@ export default function Sales() {
       }
 
       // Award loyalty points (now handled server-side)
-      if (selectedCustomer && selectedCustomer !== 'walk-in') {
+      if (selectedCustomer && selectedCustomer !== "walk-in") {
         toast.success(`Loyalty points applied!`);
       }
 
-      toast.success('Sale completed successfully!');
+      toast.success("Sale completed successfully!");
       setCompletedSaleId(saleId);
       setCart([]);
-      setSelectedCustomer('walk-in');
-      setCurrentSaleId(null);
+      setSelectedCustomer("walk-in");
       setLoyaltyDiscount(0);
       setLoyaltyPointsToRedeem(0);
       payment.reset();
-      loadProducts();
+      loadProducts(selectedWarehouse);
     } catch (error: any) {
-      console.error('Error completing sale:', error);
-      toast.error('Failed to complete sale: ' + error.message);
+      console.error("Error completing sale:", error);
+      toast.error("Failed to complete sale: " + error.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const openShift = async () => {
+    const amount = Number(openingFloat);
+    if (
+      !openingFloat.trim() ||
+      !Number.isFinite(amount) ||
+      amount < 0
+    ) {
+      toast.error("Enter a valid non-negative opening cash float");
+      return;
+    }
+
+    setOpeningShift(true);
+    try {
+      await ApiService.post("/shifts/open", { opening_float: amount });
+      setShowOpenShiftDialog(false);
+      setOpeningFloat("");
+      toast.success("Shift opened. Complete the sale when ready.");
+    } catch (error) {
+      toast.error(
+        `Unable to open shift: ${error instanceof Error ? error.message : "Please try again"}`,
+      );
+    } finally {
+      setOpeningShift(false);
     }
   };
 
   const handleMpesaPayment = async (phone: string, amount: number) => {
     // Validate phone number
     if (!validatePhoneNumber(phone)) {
-      toast.error('Please enter a valid Kenyan phone number');
+      toast.error("Please enter a valid Kenyan phone number");
       return false;
     }
 
     // Validate amount
     if (!validateAmount(amount)) {
-      toast.error('Invalid payment amount');
+      toast.error("Invalid payment amount");
       return false;
     }
 
-    let saleId = currentSaleId;
-
-    // Create pending sale if doesn't exist - use mpesa as initial method
-    if (!saleId && cart.length > 0) {
-      saleId = await createPendingSale('mpesa');
-      if (!saleId) {
-        return false;
-      }
-    }
-
     try {
-      return await secureApiCall(async () => {
-        return payment.initiateSTKPush(phone, amount);
-      }, paymentRateLimiter, `mpesa_${user?.id}`);
+      return await secureApiCall(
+        async () => {
+          return payment.initiateSTKPush(phone, amount, {
+            items: cart.map((item) => ({
+              product_id: item.id,
+              quantity: item.quantity,
+            })),
+            loyalty_discount: loyaltyDiscount,
+            cash_amount: payment.cashAmount,
+            store_credit_amount: payment.storeCreditAmount,
+            store_credit_barcode: payment.storeCreditBarcode || undefined,
+            warehouse_id: selectedWarehouse || undefined,
+            customer_id: selectedCustomer === "walk-in"
+              ? undefined
+              : selectedCustomer,
+          });
+        },
+        paymentRateLimiter,
+        `mpesa_${user?.id}`,
+      );
     } catch (error: any) {
       toast.error(error.message);
       return false;
     }
   };
 
-  const handleCashPayment = async (amount: number) => {
-    let saleId = currentSaleId;
-    
-    // Create pending sale if doesn't exist - use cash as initial method
-    if (!saleId && cart.length > 0) {
-      saleId = await createPendingSale('cash');
-      if (!saleId) {
-        return false;
-      }
+  const handlePaybillPayment = async (phone: string, amount: number) => {
+    if (!validatePhoneNumber(phone)) {
+      toast.error("Please enter the phone number used to make the Paybill payment");
+      return false;
     }
-    
+    if (!validateAmount(amount)) {
+      toast.error("Invalid payment amount");
+      return false;
+    }
+    try {
+      return await secureApiCall(
+        () => payment.initiatePaybill(phone, amount, {
+          items: cart.map((item) => ({
+            product_id: item.id,
+            quantity: item.quantity,
+          })),
+          loyalty_discount: loyaltyDiscount,
+          cash_amount: payment.cashAmount,
+          store_credit_amount: payment.storeCreditAmount,
+          store_credit_barcode: payment.storeCreditBarcode || undefined,
+          warehouse_id: selectedWarehouse || undefined,
+          customer_id: selectedCustomer === "walk-in"
+            ? undefined
+            : selectedCustomer,
+        }),
+        paymentRateLimiter,
+        `paybill_${user?.id}`,
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Paybill payment could not be started");
+      return false;
+    }
+  };
+
+  const handleCashPayment = async (amount: number) => {
     payment.setCashAmount(amount);
     return true;
   };
 
-  const handleStoreCreditPayment = async (amount: number, barcode: string | null) => {
+  const handleStoreCreditPayment = async (
+    amount: number,
+    barcode: string | null,
+  ) => {
     payment.addStoreCreditPayment(amount, barcode);
   };
 
@@ -443,24 +758,33 @@ export default function Sales() {
             <h1 className="text-3xl sm:text-4xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
               Point of Sale
             </h1>
-            <p className="text-muted-foreground mt-1">Fast, modern checkout experience</p>
+            <p className="text-muted-foreground mt-1">
+              Fast, modern checkout experience
+            </p>
           </div>
           <div className="flex flex-col items-end gap-2">
             <div className="flex items-center gap-2">
-              <Select value={selectedWarehouse} onValueChange={setSelectedWarehouse}>
+              <Select
+                value={selectedWarehouse}
+                onValueChange={setSelectedWarehouse}
+              >
                 <SelectTrigger className="w-[200px] border-primary/20 bg-primary/10 font-semibold">
                   <SelectValue placeholder="Select Branch" />
                 </SelectTrigger>
                 <SelectContent>
-                  {warehouses.map(w => (
-                    <SelectItem key={w.id} value={w.id}>{w.name}</SelectItem>
+                  {warehouses.map((w) => (
+                    <SelectItem key={w.id} value={w.id}>
+                      {w.name}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="flex items-center gap-2 px-4 py-2 bg-primary/10 rounded-lg border border-primary/20">
               <ShoppingCart className="h-5 w-5 text-primary" />
-              <span className="font-semibold text-primary">{cart.length} items</span>
+              <span className="font-semibold text-primary">
+                {cart.length} items
+              </span>
             </div>
           </div>
         </div>
@@ -515,8 +839,15 @@ export default function Sales() {
                             {product.name}
                           </h3>
                           {product.stock_on_hand <= 5 && (
-                            <Badge variant={product.stock_on_hand === 0 ? 'destructive' : 'secondary'} className="text-xs">
-                              {product.stock_on_hand === 0 ? 'Out' : 'Low'}
+                            <Badge
+                              variant={
+                                product.stock_on_hand === 0
+                                  ? "destructive"
+                                  : "secondary"
+                              }
+                              className="text-xs"
+                            >
+                              {product.stock_on_hand === 0 ? "Out" : "Low"}
                             </Badge>
                           )}
                         </div>
@@ -525,12 +856,25 @@ export default function Sales() {
                             SKU: {product.sku}
                           </p>
                           <p className="text-xs text-muted-foreground">
-                            Stock: <span className={product.stock_on_hand <= 5 ? 'text-destructive font-semibold' : 'text-accent font-semibold'}>{product.stock_on_hand}</span>
+                            Stock:{" "}
+                            <span
+                              className={
+                                product.stock_on_hand <= 5
+                                  ? "text-destructive font-semibold"
+                                  : "text-accent font-semibold"
+                              }
+                            >
+                              {product.stock_on_hand}
+                            </span>
                           </p>
                         </div>
                         <div className="pt-2 border-t">
                           <p className="text-xl font-bold text-primary">
-                            KSh {Number(product.retail_price || 0).toLocaleString('en-KE', { minimumFractionDigits: 2 })}
+                            KSh{" "}
+                            {Number(product.retail_price || 0).toLocaleString(
+                              "en-KE",
+                              { minimumFractionDigits: 2 },
+                            )}
                           </p>
                         </div>
                       </div>
@@ -554,11 +898,21 @@ export default function Sales() {
                     Shopping Cart
                   </div>
                   <div className="flex gap-2">
-                    <Button variant="outline" size="sm" onClick={fetchParkedSales}>
-                      <PlayCircle className="h-4 w-4 mr-1" /> Retrieve
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={fetchParkedSales}
+                      disabled={payment.checkoutReserved}
+                    >
+                      <PlayCircle className="h-4 w-4 mr-1" /> Saved Sales
                     </Button>
-                    <Button variant="outline" size="sm" onClick={parkSale} disabled={cart.length === 0 || loading}>
-                      <PauseCircle className="h-4 w-4 mr-1" /> Park
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={parkSale}
+                      disabled={cart.length === 0 || loading || payment.checkoutReserved}
+                    >
+                      <PauseCircle className="h-4 w-4 mr-1" /> Save for Later
                     </Button>
                   </div>
                 </CardTitle>
@@ -567,17 +921,26 @@ export default function Sales() {
                 {cart.length === 0 ? (
                   <div className="text-center py-12">
                     <ShoppingCart className="h-16 w-16 text-muted-foreground/30 mx-auto mb-4" />
-                    <p className="text-muted-foreground font-medium">Cart is empty</p>
-                    <p className="text-sm text-muted-foreground mt-1">Scan or select products to start</p>
+                    <p className="text-muted-foreground font-medium">
+                      Cart is empty
+                    </p>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Scan or select products to start
+                    </p>
                   </div>
                 ) : (
                   <>
                     <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2">
                       {cart.map((item) => (
-                        <div key={item.id} className="p-3 border-2 rounded-lg bg-card hover:border-primary/50 transition-all">
+                        <div
+                          key={item.id}
+                          className="p-3 border-2 rounded-lg bg-card hover:border-primary/50 transition-all"
+                        >
                           <div className="flex items-start justify-between mb-2">
                             <div className="flex-1 min-w-0">
-                              <p className="font-semibold text-sm truncate">{item.name}</p>
+                              <p className="font-semibold text-sm truncate">
+                                {item.name}
+                              </p>
                               <p className="text-xs text-muted-foreground">
                                 KSh {item.retail_price.toFixed(2)} each
                               </p>
@@ -586,6 +949,7 @@ export default function Sales() {
                               variant="ghost"
                               size="icon"
                               onClick={() => removeFromCart(item.id)}
+                              disabled={payment.checkoutReserved}
                               className="h-8 w-8 hover:bg-destructive/10 hover:text-destructive"
                             >
                               <Trash2 className="h-4 w-4" />
@@ -596,16 +960,33 @@ export default function Sales() {
                               <Button
                                 variant="outline"
                                 size="icon"
-                                onClick={() => updateQuantity(item.id, Math.max(1, item.quantity - 1))}
+                                onClick={() =>
+                                  updateQuantity(
+                                    item.id,
+                                    Math.max(1, item.quantity - 1),
+                                  )
+                                }
+                                disabled={payment.checkoutReserved}
                                 className="h-8 w-8"
                               >
                                 <Minus className="h-3 w-3" />
                               </Button>
-                              <span className="w-12 text-center font-semibold">{item.quantity}</span>
+                              <span className="w-12 text-center font-semibold">
+                                {item.quantity}
+                              </span>
                               <Button
                                 variant="outline"
                                 size="icon"
-                                onClick={() => updateQuantity(item.id, Math.min(item.stock_on_hand, item.quantity + 1))}
+                                onClick={() =>
+                                  updateQuantity(
+                                    item.id,
+                                    Math.min(
+                                      item.stock_on_hand,
+                                      item.quantity + 1,
+                                    ),
+                                  )
+                                }
+                                disabled={payment.checkoutReserved}
                                 className="h-8 w-8"
                               >
                                 <Plus className="h-3 w-3" />
@@ -621,13 +1002,21 @@ export default function Sales() {
 
                     <div className="space-y-3 pt-4 border-t-2">
                       <div>
-                        <Label className="text-xs font-semibold text-muted-foreground">CUSTOMER</Label>
-                        <Select value={selectedCustomer} onValueChange={handleCustomerChange}>
+                        <Label className="text-xs font-semibold text-muted-foreground">
+                          CUSTOMER
+                        </Label>
+                        <Select
+                          value={selectedCustomer}
+                          onValueChange={handleCustomerChange}
+                          disabled={payment.checkoutReserved}
+                        >
                           <SelectTrigger className="mt-1">
                             <SelectValue placeholder="Walk-in customer" />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="walk-in">Walk-in customer</SelectItem>
+                            <SelectItem value="walk-in">
+                              Walk-in customer
+                            </SelectItem>
                             {customers.map((customer) => (
                               <SelectItem key={customer.id} value={customer.id}>
                                 {customer.name} - {customer.phone}
@@ -638,10 +1027,13 @@ export default function Sales() {
                       </div>
 
                       {/* Loyalty Redemption - only show for registered customers */}
-                      {selectedCustomer !== 'walk-in' && cart.length > 0 && (
+                      {selectedCustomer !== "walk-in" && cart.length > 0 && (
                         <LoyaltyRedemption
                           customerId={selectedCustomer}
-                          totalAmount={cart.reduce((sum, item) => sum + item.lineTotal, 0)}
+                          totalAmount={cart.reduce(
+                            (sum, item) => sum + item.lineTotal,
+                            0,
+                          )}
                           onApplyDiscount={handleLoyaltyDiscount}
                           appliedDiscount={loyaltyDiscount}
                           appliedPoints={loyaltyPointsToRedeem}
@@ -654,14 +1046,30 @@ export default function Sales() {
                         cashAmount={payment.cashAmount}
                         mpesaAmount={payment.mpesaAmount}
                         storeCreditAmount={payment.storeCreditAmount}
+                        storeCreditAccountBalance={Number(
+                          customers.find(
+                            (customer) => customer.id === selectedCustomer,
+                          )?.store_credit_balance || 0,
+                        )}
                         remainingAmount={payment.remainingAmount}
                         changeAmount={payment.changeAmount}
                         status={payment.status}
                         mpesaPending={payment.mpesaPending}
+                        checkoutReserved={payment.checkoutReserved}
+                        recoveringCheckout={payment.recoveringCheckout}
+                        canCancelCheckout={payment.canCancelCheckout}
+                        paybillNumber={mpesaConfig.paybill_number}
+                        paybillEnabled={mpesaConfig.paybill_c2b_enabled}
+                        stkPushEnabled={mpesaConfig.stk_push_enabled}
+                        stkPushIssues={mpesaConfig.stk_push_issues}
+                        paybillReference={payment.paybillReference}
+                        paybillAmount={payment.paybillAmount}
                         onCashAmountChange={handleCashPayment}
                         onMpesaPayment={handleMpesaPayment}
+                        onPaybillPayment={handlePaybillPayment}
                         onStoreCreditPayment={handleStoreCreditPayment}
                         onCompleteSale={completeSale}
+                        onCancelCheckout={payment.cancelCheckout}
                         isFullyPaid={payment.isFullyPaid}
                         disabled={loading || cart.length === 0}
                       />
@@ -681,25 +1089,78 @@ export default function Sales() {
         />
       )}
 
+      <Dialog
+        open={showOpenShiftDialog}
+        onOpenChange={(open) => {
+          if (!openingShift) setShowOpenShiftDialog(open);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Open a cashier shift</DialogTitle>
+            <DialogDescription>
+              A shift must be open before a sale can be completed. Your cart and payment amounts will be kept.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="sales-opening-float">Opening cash float (KSh)</Label>
+            <Input
+              id="sales-opening-float"
+              type="number"
+              min="0"
+              step="0.01"
+              value={openingFloat}
+              onChange={(event) => setOpeningFloat(event.target.value)}
+              placeholder="0.00"
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowOpenShiftDialog(false)}
+              disabled={openingShift}
+            >
+              Cancel
+            </Button>
+            <Button onClick={() => void openShift()} disabled={openingShift}>
+              {openingShift ? "Opening..." : "Open Shift"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Parked Sales Modal */}
       <Dialog open={showParkedModal} onOpenChange={setShowParkedModal}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Parked Sales</DialogTitle>
+            <DialogDescription>
+              Resume a saved sale to continue checkout.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 max-h-[60vh] overflow-y-auto">
             {parkedSales.length === 0 ? (
-              <p className="text-center text-muted-foreground py-4">No parked sales found.</p>
+              <p className="text-center text-muted-foreground py-4">
+                No parked sales found.
+              </p>
             ) : (
-              parkedSales.map(sale => (
-                <div key={sale.id} className="flex items-center justify-between p-3 border rounded-lg bg-card">
+              parkedSales.map((sale) => (
+                <div
+                  key={sale.id}
+                  className="flex items-center justify-between p-3 border rounded-lg bg-card"
+                >
                   <div>
                     <p className="font-medium">
-                      {sale.customer ? sale.customer.name : 'Walk-in'} - {new Date(sale.created_at).toLocaleString()}
+                      {sale.customer ? sale.customer.name : "Walk-in"} -{" "}
+                      {new Date(sale.created_at).toLocaleString()}
                     </p>
-                    <p className="text-sm text-muted-foreground">{sale.items.length} items</p>
+                    <p className="text-sm text-muted-foreground">
+                      {sale.items.length} items
+                    </p>
                   </div>
-                  <Button onClick={() => retrieveParkedSale(sale)}>Resume</Button>
+                  <Button onClick={() => retrieveParkedSale(sale)}>
+                    Resume
+                  </Button>
                 </div>
               ))
             )}

@@ -1,7 +1,25 @@
-import { Home, Package, ShoppingCart, Users, Settings, LogOut, TruckIcon, FileText, BarChart3, MapPin, ArrowRightLeft, Receipt, ClipboardCheck, FileSpreadsheet, History, RotateCcw, Clock, Wallet } from 'lucide-react';
-import { NavLink } from 'react-router-dom';
+import {
+  Home,
+  ShoppingCart,
+  Users,
+  Settings,
+  LogOut,
+  TruckIcon,
+  BarChart3,
+  Receipt,
+  History,
+  RotateCcw,
+  Clock,
+  Wallet,
+  Award,
+  Smartphone,
+  Package,
+  FileText,
+} from "lucide-react";
+import { NavLink } from "react-router-dom";
 import {
   Sidebar,
+  SidebarHeader,
   SidebarContent,
   SidebarGroup,
   SidebarGroupContent,
@@ -10,75 +28,213 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarFooter,
-} from '@/components/ui/sidebar';
-import { useAuth } from '@/hooks/useAuth';
-import { Button } from './ui/button';
+  useSidebar,
+} from "@/components/ui/sidebar";
+import { useAuth } from "@/hooks/useAuth";
+import { Button } from "./ui/button";
+import { CompanyBrand } from "@/components/CompanyBranding";
 
 export function AppSidebar() {
   const { userRole, signOut } = useAuth();
+  const { isMobile, setOpenMobile } = useSidebar();
 
-  const navItems = [
-    { title: 'Dashboard', url: '/dashboard', icon: Home, roles: ['admin', 'cashier'] },
-    { title: 'New Sale', url: '/sales', icon: ShoppingCart, roles: ['admin', 'cashier'] },
-    { title: 'Invoices', url: '/invoices', icon: Receipt, roles: ['admin', 'cashier'] },
-    { title: 'Returns', url: '/returns', icon: RotateCcw, roles: ['admin', 'cashier'] },
-    { title: 'Products', url: '/products', icon: Package, roles: ['admin', 'cashier'] },
-    { title: 'Customers', url: '/customers', icon: Users, roles: ['admin', 'cashier'] },
-    { title: 'Vendors', url: '/vendors', icon: TruckIcon, roles: ['admin'] },
-    { title: 'Purchase Orders', url: '/purchase-orders', icon: FileText, roles: ['admin'] },
-    { title: 'Delivery Notes', url: '/delivery-notes', icon: ClipboardCheck, roles: ['admin'] },
-    { title: 'Supplier Invoices', url: '/supplier-invoices', icon: FileSpreadsheet, roles: ['admin'] },
-    { title: 'Stock Movements', url: '/stock-movements', icon: History, roles: ['admin'] },
-    { title: 'Accounts Receivable', url: '/accounts-receivable', icon: Wallet, roles: ['admin'] },
-    { title: 'Shifts', url: '/shifts', icon: Clock, roles: ['admin', 'cashier'] },
-    { title: 'Locations', url: '/locations', icon: MapPin, roles: ['admin'] },
-    { title: 'Transfers', url: '/inventory-transfers', icon: ArrowRightLeft, roles: ['admin'] },
-    { title: 'Reports', url: '/reports', icon: BarChart3, roles: ['admin'] },
-    { title: 'Settings', url: '/settings', icon: Settings, roles: ['admin'] },
-    { title: 'User Management', url: '/users', icon: Users, roles: ['admin'] },
+  const navSections = [
+    {
+      title: "Overview",
+      items: [
+        {
+          title: "Dashboard",
+          url: "/dashboard",
+          icon: Home,
+          roles: ["admin", "cashier"],
+        },
+      ],
+    },
+    {
+      title: "Sales & Checkout",
+      items: [
+        {
+          title: "Shift Register",
+          url: "/shifts",
+          icon: Clock,
+          roles: ["admin", "cashier"],
+        },
+        {
+          title: "POS Checkout",
+          url: "/sales",
+          icon: ShoppingCart,
+          roles: ["admin", "cashier"],
+        },
+        {
+          title: "Mobile POS",
+          url: "/mobile-cashier",
+          icon: Smartphone,
+          roles: ["admin", "cashier"],
+        },
+        {
+          title: "Invoices",
+          url: "/invoices",
+          icon: Receipt,
+          roles: ["admin", "cashier"],
+        },
+        {
+          title: "Returns",
+          url: "/returns",
+          icon: RotateCcw,
+          roles: ["admin", "cashier"],
+        },
+        {
+          title: "Customers",
+          url: "/customers",
+          icon: Users,
+          roles: ["admin", "cashier"],
+        },
+        {
+          title: "Loyalty",
+          url: "/loyalty",
+          icon: Award,
+          roles: ["admin", "cashier"],
+        },
+      ],
+    },
+    {
+      title: "Inventory & Procurement",
+      items: [
+        {
+          title: "Products",
+          url: "/products",
+          icon: Package,
+          roles: ["admin"],
+        },
+        {
+          title: "Inventory Operations",
+          url: "/inventory-operations",
+          icon: History,
+          roles: ["admin"],
+        },
+        {
+          title: "Purchase Orders",
+          url: "/purchase-orders",
+          icon: TruckIcon,
+          roles: ["admin"],
+        },
+        {
+          title: "Suppliers",
+          url: "/vendors",
+          icon: TruckIcon,
+          roles: ["admin"],
+        },
+        {
+          title: "Vendor Portal",
+          url: "/vendor-portal",
+          icon: FileText,
+          roles: ["admin"],
+        },
+      ],
+    },
+    {
+      title: "Finance & Reporting",
+      items: [
+        {
+          title: "Receivables",
+          url: "/accounts-receivable",
+          icon: Wallet,
+          roles: ["admin"],
+        },
+        {
+          title: "Business Reports",
+          url: "/reports",
+          icon: BarChart3,
+          roles: ["admin"],
+        },
+      ],
+    },
+    {
+      title: "Administration",
+      items: [
+        {
+          title: "Users",
+          url: "/users",
+          icon: Users,
+          roles: ["admin"],
+        },
+        {
+          title: "Settings",
+          url: "/settings",
+          icon: Settings,
+          roles: ["admin"],
+        },
+      ],
+    },
   ];
 
-  const filteredItems = navItems.filter((item) =>
-    item.roles.includes(userRole || '')
-  );
+  const visibleSections = navSections
+    .map((section) => ({
+      ...section,
+      items: section.items.filter((item) =>
+        item.roles.includes(userRole || ""),
+      ),
+    }))
+    .filter((section) => section.items.length > 0);
 
   return (
-    <Sidebar>
+    <Sidebar
+      side="left"
+      collapsible="icon"
+      role="navigation"
+      aria-label="Main navigation"
+    >
+      <SidebarHeader className="border-b border-sidebar-border p-4">
+        <div className="flex min-w-0 items-center gap-3">
+          <CompanyBrand
+            className="gap-3"
+            imageClassName="h-9 w-9"
+            nameClassName="text-sm font-semibold text-sidebar-foreground group-data-[collapsible=icon]:hidden"
+            subtitle={`${userRole} workspace`}
+            subtitleClassName="capitalize text-sidebar-foreground/65 group-data-[collapsible=icon]:hidden"
+          />
+        </div>
+      </SidebarHeader>
       <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupLabel>Wholesale POS</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {filteredItems.map((item) => (
-                <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton asChild>
-                    <NavLink
-                      to={item.url}
-                      end
-                      className={({ isActive }) =>
-                        isActive
-                          ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-                          : ''
-                      }
-                    >
-                      <item.icon className="h-4 w-4" />
-                      <span>{item.title}</span>
-                    </NavLink>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
+        {visibleSections.map((section) => (
+          <SidebarGroup key={section.title}>
+            <SidebarGroupLabel>{section.title}</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {section.items.map((item) => (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton asChild>
+                      <NavLink
+                        to={item.url}
+                        end
+                        onClick={() => {
+                          if (isMobile) setOpenMobile(false);
+                        }}
+                        className={({ isActive }) =>
+                          isActive
+                            ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                            : ""
+                        }
+                      >
+                        <item.icon className="h-4 w-4" />
+                        <span>{item.title}</span>
+                      </NavLink>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        ))}
       </SidebarContent>
       <SidebarFooter>
         <Button
           variant="ghost"
-          className="w-full justify-start text-sidebar-foreground"
+          className="w-full justify-start text-sidebar-foreground group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0"
           onClick={signOut}
         >
-          <LogOut className="h-4 w-4 mr-2" />
-          Logout
+          <LogOut className="h-4 w-4 mr-2 group-data-[collapsible=icon]:mr-0" />
+          <span className="group-data-[collapsible=icon]:hidden">Logout</span>
         </Button>
       </SidebarFooter>
     </Sidebar>

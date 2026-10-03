@@ -1,9 +1,19 @@
 import { Request, Response, NextFunction } from "express";
 import * as jwt from "jsonwebtoken";
+import { AppDataSource } from "../data-source";
+import { User } from "../entity/User";
 
 export interface AuthenticatedRequest extends Request {
     user?: any;
 }
+
+const getJwtSecret = () => {
+    const jwtSecret = process.env.JWT_SECRET;
+    if (!jwtSecret) {
+        throw new Error("JWT_SECRET is not configured");
+    }
+    return jwtSecret;
+};
 
 export const authenticateJWT = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     const authHeader = req.headers.authorization;
@@ -11,12 +21,21 @@ export const authenticateJWT = (req: AuthenticatedRequest, res: Response, next: 
     if (authHeader) {
         const token = authHeader.split(" ")[1];
 
-        jwt.verify(token, process.env.JWT_SECRET || "pos-secret", (err: any, user: any) => {
+        jwt.verify(token, getJwtSecret(), async (err: any, user: any) => {
             if (err) {
                 return res.sendStatus(403);
             }
 
-            req.user = user;
+            try {
+                const currentUser = await AppDataSource.getRepository(User).findOneBy({ id: user.id });
+                if (!currentUser || !currentUser.is_active) {
+                    return res.status(401).json({ message: "Account is inactive" });
+                }
+                req.user = { ...user, id: currentUser.id, email: currentUser.email, role: currentUser.role };
+            } catch (error) {
+                console.error("Authentication user lookup failed:", error);
+                return res.sendStatus(503);
+            }
             next();
         });
     } else {

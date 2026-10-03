@@ -36,9 +36,12 @@ export function StockAlertBadge() {
               </p>
             )}
             <div className="text-xs text-muted-foreground mt-2">
-              {alerts.slice(0, 3).map((alert, idx) => (
-                <div key={idx}>
-                  • {alert.name} ({alert.stock_on_hand})
+              {alerts.slice(0, 3).map((alert) => (
+                <div key={alert.id} className="flex justify-between gap-3">
+                  <span>{alert.name}</span>
+                  <span className="whitespace-nowrap">
+                    {Number(alert.stock_on_hand)} / {Number(alert.reorder_level)}
+                  </span>
                 </div>
               ))}
               {alerts.length > 3 && (

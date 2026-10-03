@@ -15,16 +15,17 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-  key TEXT;
+  key_text TEXT;
+  key BYTEA;
 BEGIN
-  -- Use provided key or get from environment/settings
-  key := COALESCE(encryption_key, 'default_pos_encryption_key_32_chars!');
-
-  -- Ensure key is 32 characters for AES-256
-  key := RPAD(key, 32, '0');
+  key_text := COALESCE(encryption_key, current_setting('app.encryption_key', true));
+  IF key_text IS NULL OR key_text !~ '^[0-9A-Fa-f]{64}$' THEN
+    RAISE EXCEPTION 'app.encryption_key must contain a 32-byte hexadecimal key';
+  END IF;
+  key := decode(key_text, 'hex');
 
   -- Encrypt using AES-256
-  RETURN encode(encrypt(data::bytea, key::bytea, 'aes'), 'hex');
+  RETURN encode(encrypt(data::bytea, key, 'aes'), 'hex');
 END;
 $$;
 
@@ -39,16 +40,17 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-  key TEXT;
+  key_text TEXT;
+  key BYTEA;
 BEGIN
-  -- Use provided key or get from environment/settings
-  key := COALESCE(encryption_key, 'default_pos_encryption_key_32_chars!');
-
-  -- Ensure key is 32 characters for AES-256
-  key := RPAD(key, 32, '0');
+  key_text := COALESCE(encryption_key, current_setting('app.encryption_key', true));
+  IF key_text IS NULL OR key_text !~ '^[0-9A-Fa-f]{64}$' THEN
+    RAISE EXCEPTION 'app.encryption_key must contain a 32-byte hexadecimal key';
+  END IF;
+  key := decode(key_text, 'hex');
 
   -- Decrypt using AES-256
-  RETURN convert_from(decrypt(decode(encrypted_data, 'hex'), key::bytea, 'aes'), 'UTF8');
+  RETURN convert_from(decrypt(decode(encrypted_data, 'hex'), key, 'aes'), 'UTF8');
 EXCEPTION
   WHEN OTHERS THEN
     -- Return null on decryption failure to prevent data leakage

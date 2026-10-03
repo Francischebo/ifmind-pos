@@ -1,13 +1,13 @@
-import { useState, useEffect } from 'react';
-import { supabase } from '@/integrations/supabase/client';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Receipt, Search, Plus, CreditCard, Eye } from 'lucide-react';
-import { toast } from 'sonner';
-import { useAuth } from '@/hooks/useAuth';
+import { useState, useEffect } from "react";
+import { ApiService } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Receipt, Search, Plus, CreditCard, Eye } from "lucide-react";
+import { toast } from "sonner";
+import { useAuth } from "@/hooks/useAuth";
 import {
   Table,
   TableBody,
@@ -15,22 +15,22 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table';
+} from "@/components/ui/table";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from '@/components/ui/dialog';
+} from "@/components/ui/dialog";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select';
-import { format, addDays } from 'date-fns';
+} from "@/components/ui/select";
+import { format, addDays } from "date-fns";
 
 interface SupplierInvoice {
   id: string;
@@ -65,6 +65,15 @@ interface PurchaseOrder {
   vendor_id: string;
 }
 
+interface DeliveryNote {
+  id: string;
+  grn_number: string;
+  po_id: string;
+  vendor_id: string;
+  total_value: number;
+  status: string;
+}
+
 interface SupplierPayment {
   id: string;
   amount: number;
@@ -78,28 +87,31 @@ export default function SupplierInvoices() {
   const [invoices, setInvoices] = useState<SupplierInvoice[]>([]);
   const [vendors, setVendors] = useState<Vendor[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
-  const [searchTerm, setSearchTerm] = useState('');
+  const [deliveryNotes, setDeliveryNotes] = useState<DeliveryNote[]>([]);
+  const [searchTerm, setSearchTerm] = useState("");
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
-  const [selectedInvoice, setSelectedInvoice] = useState<SupplierInvoice | null>(null);
+  const [selectedInvoice, setSelectedInvoice] =
+    useState<SupplierInvoice | null>(null);
   const [payments, setPayments] = useState<SupplierPayment[]>([]);
 
   const [formData, setFormData] = useState({
-    invoice_number: '',
-    vendor_id: '',
-    po_id: '',
-    invoice_date: format(new Date(), 'yyyy-MM-dd'),
-    due_date: format(addDays(new Date(), 30), 'yyyy-MM-dd'),
-    subtotal: '',
-    tax_amount: '',
+    invoice_number: "",
+    vendor_id: "",
+    po_id: "",
+    delivery_note_id: "",
+    invoice_date: format(new Date(), "yyyy-MM-dd"),
+    due_date: format(addDays(new Date(), 30), "yyyy-MM-dd"),
+    subtotal: "",
+    tax_amount: "",
   });
 
   const [paymentForm, setPaymentForm] = useState({
-    amount: '',
-    payment_method: 'bank_transfer',
-    reference_number: '',
-    payment_date: format(new Date(), 'yyyy-MM-dd'),
+    amount: "",
+    payment_method: "bank_transfer",
+    reference_number: "",
+    payment_date: format(new Date(), "yyyy-MM-dd"),
   });
 
   useEffect(() => {
@@ -108,37 +120,62 @@ export default function SupplierInvoices() {
 
   const loadData = async () => {
     setLoading(true);
-    const [invoicesRes, vendorsRes, posRes] = await Promise.all([
-      supabase
-        .from('supplier_invoices')
-        .select('*, vendors(name), purchase_orders(po_number)')
-        .order('created_at', { ascending: false }),
-      supabase.from('vendors').select('id, name, payment_terms').order('name'),
-      supabase
-        .from('purchase_orders')
-        .select('id, po_number, total_amount, vendor_id')
-        .in('status', ['sent', 'received'])
-        .order('created_at', { ascending: false }),
-    ]);
+    try {
+      const [invoicesData, vendorsData, posData, deliveryNotesData] =
+        await Promise.all([
+          ApiService.get<
+            Array<
+              SupplierInvoice & {
+                vendor?: { name: string };
+                purchase_order?: { po_number: string };
+              }
+            >
+          >("/procurement/supplier-invoices"),
+          ApiService.get<Array<Vendor>>("/vendors"),
+          ApiService.get<Array<PurchaseOrder>>("/purchase-orders"),
+          ApiService.get<Array<DeliveryNote>>("/delivery-notes"),
+        ]);
 
-    setInvoices(invoicesRes.data || []);
-    setVendors(vendorsRes.data || []);
-    setPurchaseOrders(posRes.data || []);
-    setLoading(false);
+      setInvoices(
+        (invoicesData || []).map((invoice) => ({
+          ...invoice,
+          vendors: invoice.vendor ?? invoice.vendors ?? null,
+          purchase_orders:
+            invoice.purchase_order ?? invoice.purchase_orders ?? null,
+        })) as SupplierInvoice[],
+      );
+      setVendors((vendorsData || []) as Vendor[]);
+      setPurchaseOrders((posData || []) as PurchaseOrder[]);
+      setDeliveryNotes((deliveryNotesData || []) as DeliveryNote[]);
+    } catch (error: any) {
+      toast.error(error.message || "Failed to load supplier invoice data");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const loadPayments = async (invoiceId: string) => {
-    const { data } = await supabase
-      .from('supplier_payments')
-      .select('*')
-      .eq('supplier_invoice_id', invoiceId)
-      .order('payment_date', { ascending: false });
-    setPayments(data || []);
+    try {
+      const data = await ApiService.get<SupplierPayment[]>(
+        `/procurement/supplier-invoices/${invoiceId}/payments`,
+      );
+      setPayments(data || []);
+    } catch (error: any) {
+      console.error("Failed to load supplier payments", error);
+      setPayments([]);
+    }
   };
 
   const handleCreateInvoice = async () => {
-    if (!user?.id || !formData.vendor_id) {
-      toast.error('Please fill all required fields');
+    if (
+      !user?.id ||
+      !formData.vendor_id ||
+      !formData.po_id ||
+      !formData.delivery_note_id
+    ) {
+      toast.error(
+        "Select a vendor, purchase order, and completed goods receipt",
+      );
       return;
     }
 
@@ -146,34 +183,35 @@ export default function SupplierInvoices() {
     const tax_amount = parseFloat(formData.tax_amount) || 0;
     const total_amount = subtotal + tax_amount;
 
-    const { error } = await supabase.from('supplier_invoices').insert({
-      invoice_number: formData.invoice_number,
-      vendor_id: formData.vendor_id,
-      po_id: formData.po_id || null,
-      invoice_date: formData.invoice_date,
-      due_date: formData.due_date,
-      subtotal,
-      tax_amount,
-      total_amount,
-      balance_due: total_amount,
-      created_by: user.id,
-    });
+    try {
+      await ApiService.post("/procurement/supplier-invoices", {
+        invoice_number: formData.invoice_number,
+        vendor_id: formData.vendor_id,
+        po_id: formData.po_id || null,
+        delivery_note_id: formData.delivery_note_id,
+        invoice_date: formData.invoice_date,
+        due_date: formData.due_date,
+        subtotal,
+        tax_amount,
+        total_amount,
+        created_by: user.id,
+      });
 
-    if (error) {
-      toast.error('Failed to create invoice: ' + error.message);
-    } else {
-      toast.success('Supplier invoice created');
+      toast.success("Supplier invoice created");
       setDialogOpen(false);
       setFormData({
-        invoice_number: '',
-        vendor_id: '',
-        po_id: '',
-        invoice_date: format(new Date(), 'yyyy-MM-dd'),
-        due_date: format(addDays(new Date(), 30), 'yyyy-MM-dd'),
-        subtotal: '',
-        tax_amount: '',
+        invoice_number: "",
+        vendor_id: "",
+        po_id: "",
+        delivery_note_id: "",
+        invoice_date: format(new Date(), "yyyy-MM-dd"),
+        due_date: format(addDays(new Date(), 30), "yyyy-MM-dd"),
+        subtotal: "",
+        tax_amount: "",
       });
-      loadData();
+      await loadData();
+    } catch (error: any) {
+      toast.error(error.message || "Failed to create invoice");
     }
   };
 
@@ -182,37 +220,39 @@ export default function SupplierInvoices() {
 
     const amount = parseFloat(paymentForm.amount);
     if (isNaN(amount) || amount <= 0) {
-      toast.error('Please enter a valid amount');
+      toast.error("Please enter a valid amount");
       return;
     }
 
     if (amount > selectedInvoice.balance_due) {
-      toast.error('Payment exceeds balance due');
+      toast.error("Payment exceeds balance due");
       return;
     }
 
-    const { error } = await supabase.from('supplier_payments').insert({
-      supplier_invoice_id: selectedInvoice.id,
-      vendor_id: selectedInvoice.vendor_id,
-      amount,
-      payment_method: paymentForm.payment_method,
-      reference_number: paymentForm.reference_number || null,
-      payment_date: paymentForm.payment_date,
-      paid_by: user.id,
-    });
+    try {
+      await ApiService.post(
+        `/procurement/supplier-invoices/${selectedInvoice.id}/payments`,
+        {
+          amount,
+          payment_method: paymentForm.payment_method,
+          reference_number: paymentForm.reference_number || null,
+          payment_date: paymentForm.payment_date,
+          paid_by: user.id,
+        },
+      );
 
-    if (error) {
-      toast.error('Failed to record payment: ' + error.message);
-    } else {
-      toast.success('Payment recorded');
+      toast.success("Payment recorded");
       setPaymentDialogOpen(false);
       setPaymentForm({
-        amount: '',
-        payment_method: 'bank_transfer',
-        reference_number: '',
-        payment_date: format(new Date(), 'yyyy-MM-dd'),
+        amount: "",
+        payment_method: "bank_transfer",
+        reference_number: "",
+        payment_date: format(new Date(), "yyyy-MM-dd"),
       });
-      loadData();
+      await loadData();
+      await loadPayments(selectedInvoice.id);
+    } catch (error: any) {
+      toast.error(error.message || "Failed to record payment");
     }
   };
 
@@ -223,22 +263,31 @@ export default function SupplierInvoices() {
 
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'unpaid': return 'secondary';
-      case 'partially_paid': return 'outline';
-      case 'paid': return 'default';
-      case 'overdue': return 'destructive';
-      case 'disputed': return 'destructive';
-      default: return 'default';
+      case "pending":
+      case "unpaid":
+        return "secondary";
+      case "matched":
+      case "partially_paid":
+        return "outline";
+      case "paid":
+        return "default";
+      case "discrepancy":
+      case "overdue":
+        return "destructive";
+      case "disputed":
+        return "destructive";
+      default:
+        return "default";
     }
   };
 
   const filteredInvoices = invoices.filter(
     (inv) =>
       inv.invoice_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      inv.vendors?.name.toLowerCase().includes(searchTerm.toLowerCase())
+      inv.vendors?.name.toLowerCase().includes(searchTerm.toLowerCase()),
   );
 
-  const isAdmin = role === 'admin';
+  const isAdmin = role === "admin";
 
   // Calculate totals
   const totalPayables = invoices.reduce((sum, inv) => sum + inv.balance_due, 0);
@@ -274,7 +323,12 @@ export default function SupplierInvoices() {
                     <Label>Invoice Number *</Label>
                     <Input
                       value={formData.invoice_number}
-                      onChange={(e) => setFormData({ ...formData, invoice_number: e.target.value })}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          invoice_number: e.target.value,
+                        })
+                      }
                       placeholder="INV-001"
                     />
                   </div>
@@ -282,14 +336,18 @@ export default function SupplierInvoices() {
                     <Label>Vendor *</Label>
                     <Select
                       value={formData.vendor_id}
-                      onValueChange={(val) => setFormData({ ...formData, vendor_id: val })}
+                      onValueChange={(val) =>
+                        setFormData({ ...formData, vendor_id: val })
+                      }
                     >
                       <SelectTrigger>
                         <SelectValue placeholder="Select vendor" />
                       </SelectTrigger>
                       <SelectContent>
                         {vendors.map((v) => (
-                          <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>
+                          <SelectItem key={v.id} value={v.id}>
+                            {v.name}
+                          </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
@@ -302,10 +360,21 @@ export default function SupplierInvoices() {
                     value={formData.po_id}
                     onValueChange={(val) => {
                       const po = purchaseOrders.find((p) => p.id === val);
+                      const availableNotes = deliveryNotes.filter(
+                        (note) =>
+                          note.po_id === val && note.status === "completed",
+                      );
                       setFormData({
                         ...formData,
                         po_id: val,
-                        subtotal: po ? po.total_amount.toString() : formData.subtotal,
+                        delivery_note_id:
+                          availableNotes.length === 1
+                            ? availableNotes[0].id
+                            : "",
+                        subtotal:
+                          availableNotes.length === 1
+                            ? Number(availableNotes[0].total_value).toString()
+                            : "",
                         vendor_id: po ? po.vendor_id : formData.vendor_id,
                       });
                     }}
@@ -316,9 +385,50 @@ export default function SupplierInvoices() {
                     <SelectContent>
                       {purchaseOrders.map((po) => (
                         <SelectItem key={po.id} value={po.id}>
-                          {po.po_number} - KSh {po.total_amount.toLocaleString()}
+                          {po.po_number} - KSh{" "}
+                          {po.total_amount.toLocaleString()}
                         </SelectItem>
                       ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div>
+                  <Label>Completed Goods Receipt *</Label>
+                  <Select
+                    value={formData.delivery_note_id}
+                    onValueChange={(value) => {
+                      const deliveryNote = deliveryNotes.find(
+                        (note) => note.id === value,
+                      );
+                      setFormData({
+                        ...formData,
+                        delivery_note_id: value,
+                        subtotal: deliveryNote
+                          ? Number(deliveryNote.total_value).toString()
+                          : formData.subtotal,
+                      });
+                    }}
+                    disabled={!formData.po_id}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select completed GRN" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {deliveryNotes
+                        .filter(
+                          (note) =>
+                            note.po_id === formData.po_id &&
+                            note.status === "completed",
+                        )
+                        .map((note) => (
+                          <SelectItem key={note.id} value={note.id}>
+                            {note.grn_number} · KSh{" "}
+                            {Number(note.total_value).toLocaleString("en-KE", {
+                              minimumFractionDigits: 2,
+                            })}
+                          </SelectItem>
+                        ))}
                     </SelectContent>
                   </Select>
                 </div>
@@ -329,7 +439,12 @@ export default function SupplierInvoices() {
                     <Input
                       type="date"
                       value={formData.invoice_date}
-                      onChange={(e) => setFormData({ ...formData, invoice_date: e.target.value })}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          invoice_date: e.target.value,
+                        })
+                      }
                     />
                   </div>
                   <div>
@@ -337,7 +452,9 @@ export default function SupplierInvoices() {
                     <Input
                       type="date"
                       value={formData.due_date}
-                      onChange={(e) => setFormData({ ...formData, due_date: e.target.value })}
+                      onChange={(e) =>
+                        setFormData({ ...formData, due_date: e.target.value })
+                      }
                     />
                   </div>
                 </div>
@@ -348,7 +465,9 @@ export default function SupplierInvoices() {
                     <Input
                       type="number"
                       value={formData.subtotal}
-                      onChange={(e) => setFormData({ ...formData, subtotal: e.target.value })}
+                      onChange={(e) =>
+                        setFormData({ ...formData, subtotal: e.target.value })
+                      }
                     />
                   </div>
                   <div>
@@ -356,7 +475,9 @@ export default function SupplierInvoices() {
                     <Input
                       type="number"
                       value={formData.tax_amount}
-                      onChange={(e) => setFormData({ ...formData, tax_amount: e.target.value })}
+                      onChange={(e) =>
+                        setFormData({ ...formData, tax_amount: e.target.value })
+                      }
                     />
                   </div>
                 </div>
@@ -364,13 +485,19 @@ export default function SupplierInvoices() {
                 <div className="pt-2 border-t">
                   <p className="text-sm text-muted-foreground">Total Amount</p>
                   <p className="text-2xl font-bold">
-                    KSh {(
-                      (parseFloat(formData.subtotal) || 0) + (parseFloat(formData.tax_amount) || 0)
-                    ).toLocaleString('en-KE', { minimumFractionDigits: 2 })}
+                    KSh{" "}
+                    {(
+                      (parseFloat(formData.subtotal) || 0) +
+                      (parseFloat(formData.tax_amount) || 0)
+                    ).toLocaleString("en-KE", { minimumFractionDigits: 2 })}
                   </p>
                 </div>
 
-                <Button onClick={handleCreateInvoice} className="w-full">
+                <Button
+                  onClick={handleCreateInvoice}
+                  className="w-full"
+                  disabled={!formData.delivery_note_id}
+                >
                   Create Invoice
                 </Button>
               </div>
@@ -389,19 +516,27 @@ export default function SupplierInvoices() {
           </CardHeader>
           <CardContent>
             <p className="text-2xl font-bold">
-              KSh {totalPayables.toLocaleString('en-KE', { minimumFractionDigits: 2 })}
+              KSh{" "}
+              {totalPayables.toLocaleString("en-KE", {
+                minimumFractionDigits: 2,
+              })}
             </p>
           </CardContent>
         </Card>
-        <Card className={overdueAmount > 0 ? 'border-destructive' : ''}>
+        <Card className={overdueAmount > 0 ? "border-destructive" : ""}>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium text-muted-foreground">
               Overdue
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className={`text-2xl font-bold ${overdueAmount > 0 ? 'text-destructive' : ''}`}>
-              KSh {overdueAmount.toLocaleString('en-KE', { minimumFractionDigits: 2 })}
+            <p
+              className={`text-2xl font-bold ${overdueAmount > 0 ? "text-destructive" : ""}`}
+            >
+              KSh{" "}
+              {overdueAmount.toLocaleString("en-KE", {
+                minimumFractionDigits: 2,
+              })}
             </p>
           </CardContent>
         </Card>
@@ -448,40 +583,74 @@ export default function SupplierInvoices() {
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center py-8">Loading...</TableCell>
+                  <TableCell colSpan={8} className="text-center py-8">
+                    Loading...
+                  </TableCell>
                 </TableRow>
               ) : filteredInvoices.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
+                  <TableCell
+                    colSpan={8}
+                    className="text-center py-8 text-muted-foreground"
+                  >
                     No invoices found
                   </TableCell>
                 </TableRow>
               ) : (
                 filteredInvoices.map((invoice) => (
                   <TableRow key={invoice.id}>
-                    <TableCell className="font-mono">{invoice.invoice_number}</TableCell>
+                    <TableCell className="font-mono">
+                      {invoice.invoice_number}
+                    </TableCell>
                     <TableCell>{invoice.vendors?.name}</TableCell>
                     <TableCell>
-                      KSh {invoice.total_amount.toLocaleString('en-KE', { minimumFractionDigits: 2 })}
+                      KSh{" "}
+                      {invoice.total_amount.toLocaleString("en-KE", {
+                        minimumFractionDigits: 2,
+                      })}
                     </TableCell>
                     <TableCell className="text-green-600">
-                      KSh {invoice.paid_amount.toLocaleString('en-KE', { minimumFractionDigits: 2 })}
-                    </TableCell>
-                    <TableCell className={invoice.balance_due > 0 ? 'text-destructive font-medium' : ''}>
-                      KSh {invoice.balance_due.toLocaleString('en-KE', { minimumFractionDigits: 2 })}
+                      KSh{" "}
+                      {invoice.paid_amount.toLocaleString("en-KE", {
+                        minimumFractionDigits: 2,
+                      })}
                     </TableCell>
                     <TableCell
-                      className={new Date(invoice.due_date) < new Date() && invoice.balance_due > 0 ? 'text-destructive' : ''}
+                      className={
+                        invoice.balance_due > 0
+                          ? "text-destructive font-medium"
+                          : ""
+                      }
                     >
-                      {format(new Date(invoice.due_date), 'dd/MM/yyyy')}
+                      KSh{" "}
+                      {invoice.balance_due.toLocaleString("en-KE", {
+                        minimumFractionDigits: 2,
+                      })}
+                    </TableCell>
+                    <TableCell
+                      className={
+                        new Date(invoice.due_date) < new Date() &&
+                        invoice.balance_due > 0
+                          ? "text-destructive"
+                          : ""
+                      }
+                    >
+                      {format(new Date(invoice.due_date), "dd/MM/yyyy")}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={getStatusColor(invoice.status)} className="capitalize">
-                        {invoice.status.replace('_', ' ')}
+                      <Badge
+                        variant={getStatusColor(invoice.status)}
+                        className="capitalize"
+                      >
+                        {invoice.status.replace("_", " ")}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right space-x-1">
-                      <Button size="sm" variant="ghost" onClick={() => handleViewInvoice(invoice)}>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => handleViewInvoice(invoice)}
+                      >
                         <Eye className="h-4 w-4" />
                       </Button>
                       {isAdmin && invoice.balance_due > 0 && (
@@ -507,10 +676,15 @@ export default function SupplierInvoices() {
       </Card>
 
       {/* Detail Dialog */}
-      <Dialog open={!!selectedInvoice && !paymentDialogOpen} onOpenChange={() => setSelectedInvoice(null)}>
+      <Dialog
+        open={!!selectedInvoice && !paymentDialogOpen}
+        onOpenChange={() => setSelectedInvoice(null)}
+      >
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Invoice: {selectedInvoice?.invoice_number}</DialogTitle>
+            <DialogTitle>
+              Invoice: {selectedInvoice?.invoice_number}
+            </DialogTitle>
           </DialogHeader>
           {selectedInvoice && (
             <div className="space-y-6">
@@ -527,11 +701,15 @@ export default function SupplierInvoices() {
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Total</p>
-                  <p className="font-bold">KSh {selectedInvoice.total_amount.toLocaleString()}</p>
+                  <p className="font-bold">
+                    KSh {selectedInvoice.total_amount.toLocaleString()}
+                  </p>
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Balance Due</p>
-                  <p className={`font-bold ${selectedInvoice.balance_due > 0 ? 'text-destructive' : 'text-green-600'}`}>
+                  <p
+                    className={`font-bold ${selectedInvoice.balance_due > 0 ? "text-destructive" : "text-green-600"}`}
+                  >
                     KSh {selectedInvoice.balance_due.toLocaleString()}
                   </p>
                 </div>
@@ -540,7 +718,9 @@ export default function SupplierInvoices() {
               <div>
                 <h4 className="font-semibold mb-2">Payment History</h4>
                 {payments.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No payments recorded</p>
+                  <p className="text-sm text-muted-foreground">
+                    No payments recorded
+                  </p>
                 ) : (
                   <Table>
                     <TableHeader>
@@ -554,12 +734,16 @@ export default function SupplierInvoices() {
                     <TableBody>
                       {payments.map((p) => (
                         <TableRow key={p.id}>
-                          <TableCell>{format(new Date(p.payment_date), 'dd/MM/yyyy')}</TableCell>
+                          <TableCell>
+                            {format(new Date(p.payment_date), "dd/MM/yyyy")}
+                          </TableCell>
                           <TableCell className="text-green-600 font-medium">
                             KSh {p.amount.toLocaleString()}
                           </TableCell>
-                          <TableCell className="capitalize">{p.payment_method.replace('_', ' ')}</TableCell>
-                          <TableCell>{p.reference_number || '-'}</TableCell>
+                          <TableCell className="capitalize">
+                            {p.payment_method.replace("_", " ")}
+                          </TableCell>
+                          <TableCell>{p.reference_number || "-"}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
@@ -591,7 +775,9 @@ export default function SupplierInvoices() {
                 <Input
                   type="number"
                   value={paymentForm.amount}
-                  onChange={(e) => setPaymentForm({ ...paymentForm, amount: e.target.value })}
+                  onChange={(e) =>
+                    setPaymentForm({ ...paymentForm, amount: e.target.value })
+                  }
                 />
               </div>
 
@@ -599,7 +785,9 @@ export default function SupplierInvoices() {
                 <Label>Payment Method</Label>
                 <Select
                   value={paymentForm.payment_method}
-                  onValueChange={(val) => setPaymentForm({ ...paymentForm, payment_method: val })}
+                  onValueChange={(val) =>
+                    setPaymentForm({ ...paymentForm, payment_method: val })
+                  }
                 >
                   <SelectTrigger>
                     <SelectValue />
@@ -617,7 +805,12 @@ export default function SupplierInvoices() {
                 <Label>Reference Number</Label>
                 <Input
                   value={paymentForm.reference_number}
-                  onChange={(e) => setPaymentForm({ ...paymentForm, reference_number: e.target.value })}
+                  onChange={(e) =>
+                    setPaymentForm({
+                      ...paymentForm,
+                      reference_number: e.target.value,
+                    })
+                  }
                 />
               </div>
 
@@ -626,7 +819,12 @@ export default function SupplierInvoices() {
                 <Input
                   type="date"
                   value={paymentForm.payment_date}
-                  onChange={(e) => setPaymentForm({ ...paymentForm, payment_date: e.target.value })}
+                  onChange={(e) =>
+                    setPaymentForm({
+                      ...paymentForm,
+                      payment_date: e.target.value,
+                    })
+                  }
                 />
               </div>
 

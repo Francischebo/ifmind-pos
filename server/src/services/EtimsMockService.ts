@@ -9,11 +9,13 @@ export class EtimsMockService {
 
         const receiptNo = `KRA-${Date.now().toString().slice(-6)}`;
         const signature = `SIG-${Math.random().toString(36).substring(2, 15).toUpperCase()}`;
-        const qrCode = `https://itax.kra.go.ke/KRA-Portal/qr/verify?invoice=${receiptNo}&sig=${signature}`;
+        const qrCode = new URL(process.env.ETIMS_QR_VERIFY_URL as string);
+        qrCode.searchParams.set("invoice", receiptNo);
+        qrCode.searchParams.set("sig", signature);
 
         return {
             receipt_no: receiptNo,
-            qr_code: qrCode,
+            qr_code: qrCode.toString(),
             signature: signature
         };
     }
@@ -23,11 +25,13 @@ export class EtimsMockService {
 
         const noteNo = `CN-KRA-${Date.now().toString().slice(-6)}`;
         const signature = `CNSIG-${Math.random().toString(36).substring(2, 15).toUpperCase()}`;
-        const qrCode = `https://itax.kra.go.ke/KRA-Portal/qr/verify-cn?invoice=${noteNo}&sig=${signature}`;
+        const qrCode = new URL(process.env.ETIMS_CREDIT_NOTE_QR_VERIFY_URL as string);
+        qrCode.searchParams.set("invoice", noteNo);
+        qrCode.searchParams.set("sig", signature);
 
         return {
             note_no: noteNo,
-            qr_code: qrCode,
+            qr_code: qrCode.toString(),
             signature: signature
         };
     }

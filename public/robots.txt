@@ -10,7 +10,7 @@ Allow: /
 User-agent: facebookexternalhit
 Allow: /
 
-# Molabs-POS - Professional Wholesale Point of Sale System
+# CFI-POS Techiez - Smart Point of Sale
 User-agent: *
 Allow: /
 Disallow: /auth

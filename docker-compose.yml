@@ -1,0 +1,77 @@
+services:
+  api:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL to the application PostgreSQL database}
+      JWT_SECRET: ${JWT_SECRET:?Set a strong JWT_SECRET}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?Set a 64-character hexadecimal ENCRYPTION_KEY}
+      TYPEORM_SYNCHRONIZE: "false"
+      FRONTEND_URL: ${PUBLIC_ORIGIN:?Set PUBLIC_ORIGIN to the browser-visible application origin}
+      CORS_ORIGINS: ${PUBLIC_ORIGIN:?Set PUBLIC_ORIGIN to the browser-visible application origin}
+      TRUST_PROXY: "1"
+      DEFAULT_ADMIN_EMAIL: ${DEFAULT_ADMIN_EMAIL:-}
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-}
+      MPESA_CONSUMER_KEY: ${MPESA_CONSUMER_KEY:-}
+      MPESA_CONSUMER_SECRET: ${MPESA_CONSUMER_SECRET:-}
+      MPESA_PASSKEY: ${MPESA_PASSKEY:-}
+      MPESA_API_BASE_URL: ${MPESA_API_BASE_URL:-}
+      MPESA_CALLBACK_URL: ${MPESA_CALLBACK_URL:-}
+      MPESA_C2B_CALLBACK_BASE_URL: ${MPESA_C2B_CALLBACK_BASE_URL:-}
+      MPESA_C2B_CALLBACK_TOKEN: ${MPESA_C2B_CALLBACK_TOKEN:-}
+      PESAPAL_SECRET: ${PESAPAL_SECRET:-}
+      PESAPAL_API_SECRET: ${PESAPAL_API_SECRET:-}
+      PESAPAL_IPN_SECRET: ${PESAPAL_IPN_SECRET:-}
+      PESAPAL_MOCK_IFRAME_URL: ${PESAPAL_MOCK_IFRAME_URL:-}
+      ETIMS_QR_VERIFY_URL: ${ETIMS_QR_VERIFY_URL:-}
+      ETIMS_CREDIT_NOTE_QR_VERIFY_URL: ${ETIMS_CREDIT_NOTE_QR_VERIFY_URL:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      AI_GATEWAY_URL: ${AI_GATEWAY_URL:-}
+      AI_MODEL: ${AI_MODEL:-}
+    expose:
+      - "3000"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 45s
+      retries: 3
+    networks:
+      - pos
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: /api
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:?Set the public Supabase project URL}
+        VITE_SUPABASE_PUBLISHABLE_KEY: ${VITE_SUPABASE_PUBLISHABLE_KEY:?Set the public Supabase publishable key}
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    networks:
+      - pos
+
+networks:
+  pos:
+    driver: bridge

@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn } from "typeorm";
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn, Index } from "typeorm";
 import { Sale } from "./Sale";
 import { User } from "./User";
 import { ReturnItem } from "./ReturnItem";
@@ -15,6 +15,12 @@ export enum ReturnStatus {
     PENDING = "pending",
     APPROVED = "approved",
     REJECTED = "rejected"
+}
+
+export enum MpesaRefundStatus {
+    NOT_REQUIRED = "not_required",
+    PENDING = "pending",
+    COMPLETED = "completed"
 }
 
 @Entity("return_requests")
@@ -62,6 +68,23 @@ export class ReturnRequest {
 
     @Column("text", { nullable: true })
     pesapal_refund_notes: string | null;
+
+    @Column({ type: "varchar", default: MpesaRefundStatus.NOT_REQUIRED })
+    mpesa_refund_status: MpesaRefundStatus;
+
+    @Column("decimal", { precision: 10, scale: 2, default: 0 })
+    mpesa_refund_amount: number;
+
+    @Index("IDX_return_requests_mpesa_refund_receipt", { unique: true, where: '"mpesa_refund_receipt" IS NOT NULL' })
+    @Column({ type: "varchar", length: 64, nullable: true })
+    mpesa_refund_receipt: string | null;
+
+    @Column("timestamp with time zone", { nullable: true })
+    mpesa_refund_completed_at: Date | null;
+
+    @ManyToOne(() => User, { nullable: true, onDelete: "SET NULL" })
+    @JoinColumn({ name: "mpesa_refund_completed_by" })
+    mpesa_refund_completed_by: User | null;
 
     @CreateDateColumn()
     created_at: Date;

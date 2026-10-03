@@ -3,6 +3,17 @@
 -- Apply these migrations in order to your Supabase SQL Editor
 -- ===========================================
 
+-- Backend payment-checkout schema note:
+-- The durable checkout reservations and M-Pesa Paybill reference indexes are
+-- managed by TypeORM migrations in server/src/migration:
+--   1791010000000-CreatePaymentCheckoutSessions
+--   1791020000000-AddMpesaPaybillReferences
+-- Apply them to the backend PostgreSQL database with `cd server` then
+-- `npm run migration:run`. This Supabase SQL script does not replace those
+-- backend migrations. Before migration 179102, reconcile duplicate non-NULL
+-- mpesa_receipt_number values using Safaricom/accounting records; do not
+-- delete payment records merely to make the unique index creation succeed.
+
 -- Migration 0: Foundational Security Schema (20251007052759)
 -- ===========================================
 
@@ -63,7 +74,7 @@ CREATE TABLE IF NOT EXISTS public.sales (
   tax_amount DECIMAL(10,2) NOT NULL,
   total_amount DECIMAL(10,2) NOT NULL,
   payment_method TEXT NOT NULL CHECK (payment_method IN ('cash', 'mpesa')),
-  status TEXT DEFAULT 'completed' CHECK (status IN ('completed', 'pending', 'voided')),
+  status TEXT DEFAULT 'completed' CHECK (status IN ('completed', 'pending', 'voided', 'partially_refunded', 'parked')),
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
@@ -517,16 +528,13 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-  key TEXT;
+  key_text TEXT;
 BEGIN
-  -- Use provided key or get from environment/settings
-  key := COALESCE(encryption_key, 'POS_SYSTEM_ENCRYPTION_KEY_32CHARS');
-
-  -- Ensure key is 32 characters for AES-256
-  key := RPAD(key, 32, '0');
-
-  -- Encrypt using AES-256
-  RETURN encode(encrypt(data::bytea, key::bytea, 'aes'), 'hex');
+  key_text := COALESCE(encryption_key, current_setting('app.encryption_key', true));
+  IF key_text IS NULL OR key_text !~ '^[0-9A-Fa-f]{64}$' THEN
+    RAISE EXCEPTION 'app.encryption_key must contain a 32-byte hexadecimal key';
+  END IF;
+  RETURN encode(pgp_sym_encrypt(data, key_text, 'cipher-algo=aes256'), 'base64');
 END;
 $$;
 
@@ -541,16 +549,13 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-  key TEXT;
+  key_text TEXT;
 BEGIN
-  -- Use provided key or get from environment/settings
-  key := COALESCE(encryption_key, 'POS_SYSTEM_ENCRYPTION_KEY_32CHARS');
-
-  -- Ensure key is 32 characters for AES-256
-  key := RPAD(key, 32, '0');
-
-  -- Decrypt using AES-256
-  RETURN convert_from(decrypt(decode(encrypted_data, 'hex'), key::bytea, 'aes'), 'UTF8');
+  key_text := COALESCE(encryption_key, current_setting('app.encryption_key', true));
+  IF key_text IS NULL OR key_text !~ '^[0-9A-Fa-f]{64}$' THEN
+    RAISE EXCEPTION 'app.encryption_key must contain a 32-byte hexadecimal key';
+  END IF;
+  RETURN pgp_sym_decrypt(decode(encrypted_data, 'base64'), key_text);
 EXCEPTION
   WHEN OTHERS THEN
     -- Return null on decryption failure to prevent data leakage
@@ -1673,7 +1678,7 @@ CREATE TABLE IF NOT EXISTS public.product_batches (
   manufacturing_date DATE,
   expiry_date DATE,
   supplier_batch_reference TEXT,
-  quality_check_status TEXT DEFAULT 'pending' CHECK (quality_check_status IN ('pending', 'passed', 'failed')),
+  quality_check_status TEXT DEFAULT 'passed' CHECK (quality_check_status IN ('pending', 'passed', 'failed', 'rejected', 'hold', 'on_hold')),
   environmental_conditions TEXT,
   initial_quantity INTEGER NOT NULL,
   current_quantity INTEGER NOT NULL,
@@ -1766,6 +1771,7 @@ ALTER TABLE public.mpesa_transactions ADD COLUMN IF NOT EXISTS idempotency_key T
 -- Encrypt sensitive data - Add encrypted phone number columns
 ALTER TABLE public.customers ADD COLUMN IF NOT EXISTS phone_encrypted TEXT;
 ALTER TABLE public.mpesa_transactions ADD COLUMN IF NOT EXISTS phone_encrypted TEXT;
+ALTER TABLE public.mpesa_transactions ADD COLUMN IF NOT EXISTS callback_token_hash TEXT;
 
 -- Add payment verification columns
 ALTER TABLE public.sales ADD COLUMN IF NOT EXISTS payment_verified BOOLEAN DEFAULT false;
@@ -2425,16 +2431,13 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-  key TEXT;
+  key_text TEXT;
 BEGIN
-  -- Use provided key or get from environment/settings
-  key := COALESCE(encryption_key, 'default_pos_encryption_key_32_chars!');
-
-  -- Ensure key is 32 characters for AES-256
-  key := RPAD(key, 32, '0');
-
-  -- Encrypt using AES-256
-  RETURN encode(encrypt(data::bytea, key::bytea, 'aes'), 'hex');
+  key_text := COALESCE(encryption_key, current_setting('app.encryption_key', true));
+  IF key_text IS NULL OR key_text !~ '^[0-9A-Fa-f]{64}$' THEN
+    RAISE EXCEPTION 'app.encryption_key must contain a 32-byte hexadecimal key';
+  END IF;
+  RETURN encode(pgp_sym_encrypt(data, key_text, 'cipher-algo=aes256'), 'base64');
 END;
 $$;
 
@@ -2449,16 +2452,13 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-  key TEXT;
+  key_text TEXT;
 BEGIN
-  -- Use provided key or get from environment/settings
-  key := COALESCE(encryption_key, 'default_pos_encryption_key_32_chars!');
-
-  -- Ensure key is 32 characters for AES-256
-  key := RPAD(key, 32, '0');
-
-  -- Decrypt using AES-256
-  RETURN convert_from(decrypt(decode(encrypted_data, 'hex'), key::bytea, 'aes'), 'UTF8');
+  key_text := COALESCE(encryption_key, current_setting('app.encryption_key', true));
+  IF key_text IS NULL OR key_text !~ '^[0-9A-Fa-f]{64}$' THEN
+    RAISE EXCEPTION 'app.encryption_key must contain a 32-byte hexadecimal key';
+  END IF;
+  RETURN pgp_sym_decrypt(decode(encrypted_data, 'base64'), key_text);
 EXCEPTION
   WHEN OTHERS THEN
     -- Return null on decryption failure to prevent data leakage

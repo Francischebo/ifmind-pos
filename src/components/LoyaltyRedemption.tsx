@@ -1,13 +1,13 @@
-import { useState, useEffect } from 'react';
-import { supabase } from '@/integrations/supabase/client';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Badge } from '@/components/ui/badge';
-import { Slider } from '@/components/ui/slider';
-import { Gift, Star, AlertCircle } from 'lucide-react';
-import { toast } from 'sonner';
+import { useState, useEffect } from "react";
+import { ApiService } from "@/lib/api";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { Slider } from "@/components/ui/slider";
+import { Gift, Star, AlertCircle } from "lucide-react";
+import { toast } from "sonner";
 
 interface LoyaltyRedemptionProps {
   customerId: string;
@@ -42,29 +42,30 @@ export function LoyaltyRedemption({
   const loadData = async () => {
     setLoading(true);
     try {
-      // Load loyalty member
-      const { data: memberData } = await supabase
-        .from('loyalty_members')
-        .select('id, points, tier')
-        .eq('customer_id', customerId)
-        .single();
+      const [members, settingsMap] = await Promise.all([
+        ApiService.get<
+          Array<{
+            id: string;
+            customer_id: string;
+            points: number;
+            tier: string;
+          }>
+        >("/loyalty/members"),
+        ApiService.get<Record<string, string>>("/loyalty/settings"),
+      ]);
 
+      const memberData = members.find((row) => row.customer_id === customerId);
       if (memberData) {
-        setMember(memberData);
+        setMember({
+          id: memberData.id,
+          points: Number(memberData.points || 0),
+          tier: memberData.tier || "Bronze",
+        });
       }
 
-      // Load points value setting
-      const { data: settingsData } = await supabase
-        .from('settings')
-        .select('value')
-        .eq('key', 'loyalty_points_value')
-        .single();
-
-      if (settingsData) {
-        setPointsValue(parseFloat(settingsData.value) || 1);
-      }
+      setPointsValue(parseFloat(settingsMap.loyalty_points_value) || 1);
     } catch (error) {
-      console.error('Error loading loyalty data:', error);
+      console.error("Error loading loyalty data:", error);
     } finally {
       setLoading(false);
     }
@@ -85,25 +86,30 @@ export function LoyaltyRedemption({
       <Card className="border border-dashed border-muted-foreground/30">
         <CardContent className="p-4 flex items-center gap-2 text-muted-foreground">
           <AlertCircle className="h-4 w-4" />
-          <span className="text-sm">Customer not enrolled in loyalty program</span>
+          <span className="text-sm">
+            Customer not enrolled in loyalty program
+          </span>
         </CardContent>
       </Card>
     );
   }
 
   const availablePoints = member.points - appliedPoints;
-  const maxRedeemableValue = Math.min(availablePoints * pointsValue, totalAmount * 0.5); // Max 50% discount
+  const maxRedeemableValue = Math.min(
+    availablePoints * pointsValue,
+    totalAmount * 0.5,
+  ); // Max 50% discount
   const maxRedeemablePoints = Math.floor(maxRedeemableValue / pointsValue);
   const discountValue = pointsToRedeem * pointsValue;
 
   const handleApplyRedemption = () => {
     if (pointsToRedeem <= 0) {
-      toast.error('Select points to redeem');
+      toast.error("Select points to redeem");
       return;
     }
 
     if (pointsToRedeem > availablePoints) {
-      toast.error('Insufficient points');
+      toast.error("Insufficient points");
       return;
     }
 
@@ -119,10 +125,14 @@ export function LoyaltyRedemption({
 
   const getTierColor = (tier: string) => {
     switch (tier) {
-      case 'Platinum': return 'bg-gradient-to-r from-slate-300 to-slate-500 text-slate-900';
-      case 'Gold': return 'bg-gradient-to-r from-yellow-400 to-amber-500 text-amber-900';
-      case 'Silver': return 'bg-gradient-to-r from-gray-300 to-gray-400 text-gray-800';
-      default: return 'bg-gradient-to-r from-amber-600 to-amber-800 text-amber-100';
+      case "Platinum":
+        return "bg-gradient-to-r from-slate-300 to-slate-500 text-slate-900";
+      case "Gold":
+        return "bg-gradient-to-r from-yellow-400 to-amber-500 text-amber-900";
+      case "Silver":
+        return "bg-gradient-to-r from-gray-300 to-gray-400 text-gray-800";
+      default:
+        return "bg-gradient-to-r from-amber-600 to-amber-800 text-amber-100";
     }
   };
 
@@ -146,7 +156,9 @@ export function LoyaltyRedemption({
             <Star className="h-4 w-4 text-yellow-500 fill-yellow-500" />
             <span className="text-sm">Available Points:</span>
           </div>
-          <span className="font-bold text-primary">{availablePoints.toLocaleString()}</span>
+          <span className="font-bold text-primary">
+            {availablePoints.toLocaleString()}
+          </span>
         </div>
 
         {appliedDiscount > 0 ? (
@@ -154,9 +166,12 @@ export function LoyaltyRedemption({
           <div className="space-y-3">
             <div className="flex items-center justify-between p-3 bg-green-500/10 rounded-lg border border-green-500/30">
               <div>
-                <p className="font-semibold text-green-600">Discount Applied!</p>
+                <p className="font-semibold text-green-600">
+                  Discount Applied!
+                </p>
                 <p className="text-sm text-muted-foreground">
-                  {appliedPoints} points = KSh {appliedDiscount.toLocaleString()}
+                  {appliedPoints} points = KSh{" "}
+                  {appliedDiscount.toLocaleString()}
                 </p>
               </div>
               <Button
@@ -176,8 +191,14 @@ export function LoyaltyRedemption({
               <>
                 <div className="space-y-2">
                   <Label className="text-xs text-muted-foreground">
-                    Points to redeem: <span className="font-bold text-foreground">{pointsToRedeem}</span>
-                    <span className="text-muted-foreground"> = KSh {discountValue.toLocaleString()}</span>
+                    Points to redeem:{" "}
+                    <span className="font-bold text-foreground">
+                      {pointsToRedeem}
+                    </span>
+                    <span className="text-muted-foreground">
+                      {" "}
+                      = KSh {discountValue.toLocaleString()}
+                    </span>
                   </Label>
                   <Slider
                     value={[pointsToRedeem]}
@@ -195,7 +216,9 @@ export function LoyaltyRedemption({
                 {/* Quick redemption buttons */}
                 <div className="flex flex-wrap gap-2">
                   {[25, 50, 75, 100].map((percent) => {
-                    const pts = Math.floor((maxRedeemablePoints * percent) / 100);
+                    const pts = Math.floor(
+                      (maxRedeemablePoints * percent) / 100,
+                    );
                     if (pts <= 0) return null;
                     return (
                       <Button
@@ -218,7 +241,8 @@ export function LoyaltyRedemption({
                   variant="secondary"
                 >
                   <Gift className="h-4 w-4 mr-2" />
-                  Apply {pointsToRedeem} Points (-KSh {discountValue.toLocaleString()})
+                  Apply {pointsToRedeem} Points (-KSh{" "}
+                  {discountValue.toLocaleString()})
                 </Button>
               </>
             ) : (

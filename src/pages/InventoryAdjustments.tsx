@@ -34,7 +34,10 @@ interface Adjustment {
   created_at: string;
   product: { name: string; sku: string };
   warehouse: { name: string };
-  authorizer: { name: string };
+  authorizer: {
+    email: string;
+    profile?: { full_name: string } | null;
+  } | null;
 }
 
 export default function InventoryAdjustments() {
@@ -226,7 +229,11 @@ export default function InventoryAdjustments() {
                     {adj.quantity_adjusted > 0 ? '+' : ''}{adj.quantity_adjusted}
                   </TableCell>
                   <TableCell className="max-w-xs truncate">{adj.reason}</TableCell>
-                  <TableCell>{adj.authorizer?.name}</TableCell>
+                  <TableCell>
+                    {adj.authorizer?.profile?.full_name ||
+                      adj.authorizer?.email ||
+                      'Unknown authorizer'}
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>

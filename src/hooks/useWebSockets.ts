@@ -8,13 +8,15 @@ export const useWebSockets = (callbacks: {
     onNewSale?: (data: { sale_id: string }) => void;
 }) => {
     const socketRef = useRef<Socket | null>(null);
+    const callbacksRef = useRef(callbacks);
+    callbacksRef.current = callbacks;
 
     useEffect(() => {
         const token = localStorage.getItem("jwt_token");
         if (!token) return;
 
         // API_BASE_URL usually ends with /api, we need base host
-        const parsedUrl = new URL(API_BASE_URL);
+        const parsedUrl = new URL(API_BASE_URL, window.location.origin);
         const baseUrl = `${parsedUrl.protocol}//${parsedUrl.host}`;
 
         socketRef.current = io(baseUrl, {
@@ -25,13 +27,12 @@ export const useWebSockets = (callbacks: {
             console.log("WebSocket connected");
         });
 
-        if (callbacks.onInventoryUpdated) {
-            socketRef.current.on("inventory_updated", callbacks.onInventoryUpdated);
-        }
-
-        if (callbacks.onNewSale) {
-            socketRef.current.on("new_sale", callbacks.onNewSale);
-        }
+        socketRef.current.on("inventory_updated", (data) => {
+            callbacksRef.current.onInventoryUpdated?.(data);
+        });
+        socketRef.current.on("new_sale", (data) => {
+            callbacksRef.current.onNewSale?.(data);
+        });
 
         socketRef.current.on("disconnect", () => {
             console.log("WebSocket disconnected");

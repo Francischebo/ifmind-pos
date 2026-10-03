@@ -1,7 +1,8 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, OneToMany } from "typeorm";
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, OneToMany, Index } from "typeorm";
 import { WarehouseStock } from "./WarehouseStock";
 
 @Entity("warehouses")
+@Index("IDX_warehouses_single_main", ["is_main"], { unique: true, where: '"is_main" = true' })
 export class Warehouse {
     @PrimaryGeneratedColumn("uuid")
     id: string;

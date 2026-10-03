@@ -1,4 +1,4 @@
-import { AppDataSource } from "../data-source";
+import * as dotenv from "dotenv";
 import { User, AppRole } from "../entity/User";
 import { Product } from "../entity/Product";
 import { Warehouse } from "../entity/Warehouse";
@@ -9,6 +9,23 @@ import { PurchaseOrder } from "../entity/PurchaseOrder";
 import { DeliveryNote } from "../entity/DeliveryNote";
 import { SupplierInvoice, InvoiceStatus } from "../entity/SupplierInvoice";
 import { AccountingService } from "../services/AccountingService";
+
+dotenv.config();
+
+const testDatabaseUrl = process.env.TEST_DATABASE_URL;
+if (!testDatabaseUrl) {
+    throw new Error("ERP integration tests require TEST_DATABASE_URL pointing to a dedicated test database.");
+}
+
+const testDatabaseName = decodeURIComponent(new URL(testDatabaseUrl).pathname.replace(/^\/+/, ""));
+if (!/test|testing|integration/i.test(testDatabaseName)) {
+    throw new Error("TEST_DATABASE_URL must use a database name containing 'test' or 'integration'.");
+}
+
+process.env.DATABASE_URL = testDatabaseUrl;
+process.env.TYPEORM_SYNCHRONIZE = "true";
+
+const { AppDataSource } = require("../data-source") as typeof import("../data-source");
 
 async function runTests() {
     console.log("---- STARTING THOROUGH ERP SYSTEM TEST ----");
@@ -118,6 +135,7 @@ async function runTests() {
         invoice.vendor = vendor;
         invoice.purchase_order = po;
         invoice.delivery_note = grn;
+        invoice.invoice_date = new Date();
         invoice.total_amount = 500; // Exact Match
         invoice.due_date = new Date();
         

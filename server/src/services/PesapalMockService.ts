@@ -8,11 +8,13 @@ export class PesapalMockService {
         await new Promise(resolve => setTimeout(resolve, 500));
 
         const trackingId = `PESA-${Math.random().toString(36).substring(2, 12).toUpperCase()}`;
-        const redirectUrl = `https://pay.pesapal.com/iframe/MockIframe?id=${trackingId}&amount=${amount}`;
+        const redirectUrl = new URL(process.env.PESAPAL_MOCK_IFRAME_URL as string);
+        redirectUrl.searchParams.set("id", trackingId);
+        redirectUrl.searchParams.set("amount", String(amount));
 
         return {
             tracking_id: trackingId,
-            redirect_url: redirectUrl
+            redirect_url: redirectUrl.toString()
         };
     }
 }

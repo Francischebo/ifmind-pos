@@ -1,22 +1,35 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ApiService } from "@/lib/api";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "@/components/ui/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
-import { 
-  DollarSign, 
-  AlertTriangle, 
-  Clock, 
+import {
+  DollarSign,
+  AlertTriangle,
+  Clock,
   TrendingUp,
   Users,
   FileText,
   Phone,
-  Mail
+  Mail,
 } from "lucide-react";
 import { format, differenceInDays, subDays } from "date-fns";
 
@@ -62,12 +75,14 @@ const AccountsReceivable = () => {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
   const [agingBuckets, setAgingBuckets] = useState<AgingBucket[]>([]);
-  const [customerBalances, setCustomerBalances] = useState<CustomerBalance[]>([]);
+  const [customerBalances, setCustomerBalances] = useState<CustomerBalance[]>(
+    [],
+  );
   const [totals, setTotals] = useState({
     totalReceivables: 0,
     totalOverdue: 0,
     totalCurrent: 0,
-    overdueCount: 0
+    overdueCount: 0,
   });
 
   useEffect(() => {
@@ -79,18 +94,18 @@ const AccountsReceivable = () => {
   const loadReceivables = async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from("invoices")
-        .select(`
-          *,
-          customer:customers(name, phone, email)
-        `)
-        .in("status", ["issued", "partially_paid"])
-        .order("due_date", { ascending: true });
-
-      if (error) throw error;
-
-      const invoiceData = data || [];
+      const data = await ApiService.get<any[]>("/invoices");
+      const invoiceData = (data || [])
+        .filter((invoice) =>
+          ["issued", "partially_paid"].includes(invoice.status),
+        )
+        .map((invoice) => ({
+          ...invoice,
+          total_amount: Number(invoice.total_amount || 0),
+          paid_amount: Number(invoice.paid_amount || 0),
+          balance_due: Number(invoice.balance_due || 0),
+          customer: invoice.customer || undefined,
+        })) as Invoice[];
       setInvoices(invoiceData);
       calculateAging(invoiceData);
       calculateCustomerBalances(invoiceData);
@@ -105,14 +120,44 @@ const AccountsReceivable = () => {
   const calculateAging = (invoiceData: Invoice[]) => {
     const today = new Date();
     const buckets: AgingBucket[] = [
-      { label: "Current", range: "Not Yet Due", amount: 0, count: 0, color: "bg-green-500" },
-      { label: "1-30 Days", range: "1-30 Days Overdue", amount: 0, count: 0, color: "bg-yellow-500" },
-      { label: "31-60 Days", range: "31-60 Days Overdue", amount: 0, count: 0, color: "bg-orange-500" },
-      { label: "61-90 Days", range: "61-90 Days Overdue", amount: 0, count: 0, color: "bg-red-400" },
-      { label: "90+ Days", range: "Over 90 Days Overdue", amount: 0, count: 0, color: "bg-red-600" }
+      {
+        label: "Current",
+        range: "Not Yet Due",
+        amount: 0,
+        count: 0,
+        color: "bg-green-500",
+      },
+      {
+        label: "1-30 Days",
+        range: "1-30 Days Overdue",
+        amount: 0,
+        count: 0,
+        color: "bg-yellow-500",
+      },
+      {
+        label: "31-60 Days",
+        range: "31-60 Days Overdue",
+        amount: 0,
+        count: 0,
+        color: "bg-orange-500",
+      },
+      {
+        label: "61-90 Days",
+        range: "61-90 Days Overdue",
+        amount: 0,
+        count: 0,
+        color: "bg-red-400",
+      },
+      {
+        label: "90+ Days",
+        range: "Over 90 Days Overdue",
+        amount: 0,
+        count: 0,
+        color: "bg-red-600",
+      },
     ];
 
-    invoiceData.forEach(invoice => {
+    invoiceData.forEach((invoice) => {
       if (!invoice.due_date) {
         buckets[0].amount += invoice.balance_due;
         buckets[0].count++;
@@ -147,18 +192,21 @@ const AccountsReceivable = () => {
     const today = new Date();
     const customerMap = new Map<string, CustomerBalance>();
 
-    invoiceData.forEach(invoice => {
+    invoiceData.forEach((invoice) => {
       if (!invoice.customer_id || !invoice.customer) return;
 
       const existing = customerMap.get(invoice.customer_id);
-      const invoiceDays = invoice.due_date 
+      const invoiceDays = invoice.due_date
         ? Math.max(0, differenceInDays(today, new Date(invoice.due_date)))
         : 0;
 
       if (existing) {
         existing.total_outstanding += invoice.balance_due;
         existing.invoice_count++;
-        existing.oldest_invoice_days = Math.max(existing.oldest_invoice_days, invoiceDays);
+        existing.oldest_invoice_days = Math.max(
+          existing.oldest_invoice_days,
+          invoiceDays,
+        );
       } else {
         customerMap.set(invoice.customer_id, {
           customer_id: invoice.customer_id,
@@ -167,14 +215,15 @@ const AccountsReceivable = () => {
           email: invoice.customer.email,
           total_outstanding: invoice.balance_due,
           invoice_count: 1,
-          oldest_invoice_days: invoiceDays
+          oldest_invoice_days: invoiceDays,
         });
       }
     });
 
-    const balances = Array.from(customerMap.values())
-      .sort((a, b) => b.total_outstanding - a.total_outstanding);
-    
+    const balances = Array.from(customerMap.values()).sort(
+      (a, b) => b.total_outstanding - a.total_outstanding,
+    );
+
     setCustomerBalances(balances);
   };
 
@@ -185,7 +234,7 @@ const AccountsReceivable = () => {
     let totalCurrent = 0;
     let overdueCount = 0;
 
-    invoiceData.forEach(invoice => {
+    invoiceData.forEach((invoice) => {
       totalReceivables += invoice.balance_due;
 
       if (invoice.due_date) {
@@ -205,14 +254,22 @@ const AccountsReceivable = () => {
   };
 
   const getStatusBadge = (invoice: Invoice) => {
-    if (!invoice.due_date) return <Badge variant="secondary">No Due Date</Badge>;
-    
-    const daysOverdue = differenceInDays(new Date(), new Date(invoice.due_date));
-    
-    if (daysOverdue > 90) return <Badge variant="destructive">90+ Days Overdue</Badge>;
-    if (daysOverdue > 60) return <Badge className="bg-red-400">61-90 Days</Badge>;
-    if (daysOverdue > 30) return <Badge className="bg-orange-500">31-60 Days</Badge>;
-    if (daysOverdue > 0) return <Badge className="bg-yellow-500 text-black">1-30 Days</Badge>;
+    if (!invoice.due_date)
+      return <Badge variant="secondary">No Due Date</Badge>;
+
+    const daysOverdue = differenceInDays(
+      new Date(),
+      new Date(invoice.due_date),
+    );
+
+    if (daysOverdue > 90)
+      return <Badge variant="destructive">90+ Days Overdue</Badge>;
+    if (daysOverdue > 60)
+      return <Badge className="bg-red-400">61-90 Days</Badge>;
+    if (daysOverdue > 30)
+      return <Badge className="bg-orange-500">31-60 Days</Badge>;
+    if (daysOverdue > 0)
+      return <Badge className="bg-yellow-500 text-black">1-30 Days</Badge>;
     return <Badge className="bg-green-500">Current</Badge>;
   };
 
@@ -223,7 +280,9 @@ const AccountsReceivable = () => {
       <div className="container mx-auto p-6 space-y-6">
         <Skeleton className="h-8 w-64" />
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          {[1, 2, 3, 4].map(i => <Skeleton key={i} className="h-32" />)}
+          {[1, 2, 3, 4].map((i) => (
+            <Skeleton key={i} className="h-32" />
+          ))}
         </div>
         <Skeleton className="h-64" />
       </div>
@@ -235,7 +294,9 @@ const AccountsReceivable = () => {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold">Accounts Receivable</h1>
-          <p className="text-muted-foreground">Track outstanding invoices and customer collections</p>
+          <p className="text-muted-foreground">
+            Track outstanding invoices and customer collections
+          </p>
         </div>
         <Button onClick={() => navigate("/invoices")}>
           <FileText className="h-4 w-4 mr-2" />
@@ -247,23 +308,35 @@ const AccountsReceivable = () => {
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium">Total Receivables</CardTitle>
+            <CardTitle className="text-sm font-medium">
+              Total Receivables
+            </CardTitle>
             <DollarSign className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">KES {totals.totalReceivables.toLocaleString()}</div>
-            <p className="text-xs text-muted-foreground">{invoices.length} outstanding invoices</p>
+            <div className="text-2xl font-bold">
+              KES {totals.totalReceivables.toLocaleString()}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {invoices.length} outstanding invoices
+            </p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium">Current (Not Due)</CardTitle>
+            <CardTitle className="text-sm font-medium">
+              Current (Not Due)
+            </CardTitle>
             <Clock className="h-4 w-4 text-green-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-green-600">KES {totals.totalCurrent.toLocaleString()}</div>
-            <p className="text-xs text-muted-foreground">Within payment terms</p>
+            <div className="text-2xl font-bold text-green-600">
+              KES {totals.totalCurrent.toLocaleString()}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Within payment terms
+            </p>
           </CardContent>
         </Card>
 
@@ -273,14 +346,20 @@ const AccountsReceivable = () => {
             <AlertTriangle className="h-4 w-4 text-red-500" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-red-600">KES {totals.totalOverdue.toLocaleString()}</div>
-            <p className="text-xs text-muted-foreground">{totals.overdueCount} overdue invoices</p>
+            <div className="text-2xl font-bold text-red-600">
+              KES {totals.totalOverdue.toLocaleString()}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {totals.overdueCount} overdue invoices
+            </p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium">Customers with Balance</CardTitle>
+            <CardTitle className="text-sm font-medium">
+              Customers with Balance
+            </CardTitle>
             <Users className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
@@ -297,7 +376,9 @@ const AccountsReceivable = () => {
             <TrendingUp className="h-5 w-5" />
             Aging Report
           </CardTitle>
-          <CardDescription>Breakdown of receivables by overdue period</CardDescription>
+          <CardDescription>
+            Breakdown of receivables by overdue period
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="space-y-4">
@@ -307,15 +388,25 @@ const AccountsReceivable = () => {
                   <div className="flex items-center gap-2">
                     <div className={`w-3 h-3 rounded-full ${bucket.color}`} />
                     <span className="font-medium">{bucket.label}</span>
-                    <span className="text-muted-foreground">({bucket.range})</span>
+                    <span className="text-muted-foreground">
+                      ({bucket.range})
+                    </span>
                   </div>
                   <div className="flex items-center gap-4">
-                    <span className="text-muted-foreground">{bucket.count} invoices</span>
-                    <span className="font-semibold w-32 text-right">KES {bucket.amount.toLocaleString()}</span>
+                    <span className="text-muted-foreground">
+                      {bucket.count} invoices
+                    </span>
+                    <span className="font-semibold w-32 text-right">
+                      KES {bucket.amount.toLocaleString()}
+                    </span>
                   </div>
                 </div>
-                <Progress 
-                  value={totalAgingAmount > 0 ? (bucket.amount / totalAgingAmount) * 100 : 0} 
+                <Progress
+                  value={
+                    totalAgingAmount > 0
+                      ? (bucket.amount / totalAgingAmount) * 100
+                      : 0
+                  }
                   className="h-2"
                 />
               </div>
@@ -332,7 +423,9 @@ const AccountsReceivable = () => {
               <Users className="h-5 w-5" />
               Top Outstanding Customers
             </CardTitle>
-            <CardDescription>Customers with highest outstanding balances</CardDescription>
+            <CardDescription>
+              Customers with highest outstanding balances
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <Table>
@@ -350,10 +443,10 @@ const AccountsReceivable = () => {
                       <div>
                         <p className="font-medium">{customer.customer_name}</p>
                         <p className="text-xs text-muted-foreground">
-                          {customer.invoice_count} invoice(s) • 
-                          {customer.oldest_invoice_days > 0 
-                            ? ` ${customer.oldest_invoice_days} days overdue` 
-                            : ' Current'}
+                          {customer.invoice_count} invoice(s) •
+                          {customer.oldest_invoice_days > 0
+                            ? ` ${customer.oldest_invoice_days} days overdue`
+                            : " Current"}
                         </p>
                       </div>
                     </TableCell>
@@ -382,7 +475,10 @@ const AccountsReceivable = () => {
                 ))}
                 {customerBalances.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={3} className="text-center text-muted-foreground py-8">
+                    <TableCell
+                      colSpan={3}
+                      className="text-center text-muted-foreground py-8"
+                    >
                       No outstanding customer balances
                     </TableCell>
                   </TableRow>
@@ -399,7 +495,9 @@ const AccountsReceivable = () => {
               <AlertTriangle className="h-5 w-5" />
               Overdue Invoices
             </CardTitle>
-            <CardDescription>Invoices requiring immediate attention</CardDescription>
+            <CardDescription>
+              Invoices requiring immediate attention
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <Table>
@@ -412,15 +510,25 @@ const AccountsReceivable = () => {
               </TableHeader>
               <TableBody>
                 {invoices
-                  .filter(inv => inv.due_date && differenceInDays(new Date(), new Date(inv.due_date)) > 0)
+                  .filter(
+                    (inv) =>
+                      inv.due_date &&
+                      differenceInDays(new Date(), new Date(inv.due_date)) > 0,
+                  )
                   .slice(0, 10)
                   .map((invoice) => (
                     <TableRow key={invoice.id}>
                       <TableCell>
                         <div>
-                          <p className="font-medium">{invoice.invoice_number}</p>
+                          <p className="font-medium">
+                            {invoice.invoice_number}
+                          </p>
                           <p className="text-xs text-muted-foreground">
-                            {invoice.customer?.name || "Walk-in"} • Due: {format(new Date(invoice.due_date!), "MMM dd, yyyy")}
+                            {invoice.customer?.name || "Walk-in"} • Due:{" "}
+                            {format(
+                              new Date(invoice.due_date!),
+                              "MMM dd, yyyy",
+                            )}
                           </p>
                         </div>
                       </TableCell>
@@ -430,9 +538,16 @@ const AccountsReceivable = () => {
                       </TableCell>
                     </TableRow>
                   ))}
-                {invoices.filter(inv => inv.due_date && differenceInDays(new Date(), new Date(inv.due_date)) > 0).length === 0 && (
+                {invoices.filter(
+                  (inv) =>
+                    inv.due_date &&
+                    differenceInDays(new Date(), new Date(inv.due_date)) > 0,
+                ).length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={3} className="text-center text-muted-foreground py-8">
+                    <TableCell
+                      colSpan={3}
+                      className="text-center text-muted-foreground py-8"
+                    >
                       No overdue invoices
                     </TableCell>
                   </TableRow>

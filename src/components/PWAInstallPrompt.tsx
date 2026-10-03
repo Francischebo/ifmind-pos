@@ -54,7 +54,7 @@ export const PWAInstallPrompt = () => {
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-2">
             <Download className="h-5 w-5 text-primary" />
-            <CardTitle className="text-base">Install IFMind-POS</CardTitle>
+            <CardTitle className="text-base">Install CFI-POS Techiez</CardTitle>
           </div>
           <Button
             variant="ghost"

@@ -2,6 +2,7 @@ import { useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Printer, Download } from 'lucide-react';
+import cfiLogo from '@/assets/cfi-pos-techiez-logo.png';
 
 interface ReceiptItem {
   name: string;
@@ -61,9 +62,13 @@ export function EnhancedReceipt({
         <CardContent className="p-6 font-mono text-sm">
           {/* Header */}
           <div className="text-center border-b-2 border-dashed pb-4 mb-4">
-            <h1 className="text-xl font-bold mb-1">IFMind-POS</h1>
+            <img
+              src={cfiLogo}
+              alt="CFI-POS Techiez Limited Company"
+              className="mx-auto mb-2 h-auto w-full max-w-[18rem] object-contain"
+            />
             <p className="text-xs text-muted-foreground">Wholesale Point of Sale</p>
-            <p className="text-xs text-muted-foreground mt-1">Built by IFMind Technologies Ltd</p>
+            <p className="text-xs text-muted-foreground mt-1">CFI-POS Techiez Limited Company</p>
           </div>
 
           {/* Sale Info */}
@@ -144,8 +149,7 @@ export function EnhancedReceipt({
           <div className="text-center text-xs text-muted-foreground border-t-2 border-dashed pt-4 mt-4">
             <p className="mb-1">Thank you for your business!</p>
             <p className="mb-1">Goods once sold cannot be returned</p>
-            <p className="text-[10px] mt-2">Powered by IFMind Technologies Ltd</p>
-            <p className="text-[10px]">www.ifmindtechnologies.com</p>
+            <p className="text-[10px] mt-2">Powered by CFI-POS Techiez</p>
           </div>
         </CardContent>
       </Card>

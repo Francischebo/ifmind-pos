@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn } from "typeorm";
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn, Index } from "typeorm";
 import { User } from "./User";
 
 export enum ShiftStatus {
@@ -7,6 +7,7 @@ export enum ShiftStatus {
 }
 
 @Entity("shifts")
+@Index("IDX_shifts_one_open_per_cashier", ["cashier_id"], { unique: true, where: `"status" = 'open'` })
 export class Shift {
     @PrimaryGeneratedColumn("uuid")
     id: string;

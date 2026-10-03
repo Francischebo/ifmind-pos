@@ -1,5 +1,5 @@
-import { Button } from '@/components/ui/button';
-import { Download } from 'lucide-react';
+import { Button } from "@/components/ui/button";
+import { Download } from "lucide-react";
 
 interface GRNItem {
   product_name: string;
@@ -29,26 +29,45 @@ interface GRNInvoiceDownloadProps {
   className?: string;
 }
 
-export function GRNInvoiceDownload({ data, className }: GRNInvoiceDownloadProps) {
+const escapeHtml = (value: unknown) =>
+  String(value ?? "").replace(/[&<>"']/g, (character) => {
+    const entities: Record<string, string> = {
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;",
+    };
+    return entities[character];
+  });
+
+export function GRNInvoiceDownload({
+  data,
+  className,
+}: GRNInvoiceDownloadProps) {
   const generateInvoiceHTML = () => {
-    const itemsRows = data.items.map(item => `
+    const itemsRows = data.items
+      .map(
+        (item) => `
       <tr>
-        <td style="padding: 10px; border-bottom: 1px solid #e5e7eb;">${item.product_name}</td>
-        <td style="padding: 10px; border-bottom: 1px solid #e5e7eb; font-family: monospace;">${item.sku}</td>
+        <td style="padding: 10px; border-bottom: 1px solid #e5e7eb;">${escapeHtml(item.product_name)}</td>
+        <td style="padding: 10px; border-bottom: 1px solid #e5e7eb; font-family: monospace;">${escapeHtml(item.sku)}</td>
         <td style="padding: 10px; border-bottom: 1px solid #e5e7eb; text-align: center;">${item.ordered_quantity}</td>
         <td style="padding: 10px; border-bottom: 1px solid #e5e7eb; text-align: center; color: #16a34a; font-weight: 600;">${item.received_quantity}</td>
-        <td style="padding: 10px; border-bottom: 1px solid #e5e7eb; text-align: center; color: ${item.rejected_quantity > 0 ? '#dc2626' : '#6b7280'};">${item.rejected_quantity || '-'}</td>
-        <td style="padding: 10px; border-bottom: 1px solid #e5e7eb; text-align: right;">KSh ${item.unit_cost.toLocaleString('en-KE', { minimumFractionDigits: 2 })}</td>
-        <td style="padding: 10px; border-bottom: 1px solid #e5e7eb; text-align: right; font-weight: 600;">KSh ${item.line_total.toLocaleString('en-KE', { minimumFractionDigits: 2 })}</td>
+        <td style="padding: 10px; border-bottom: 1px solid #e5e7eb; text-align: center; color: ${item.rejected_quantity > 0 ? "#dc2626" : "#6b7280"};">${item.rejected_quantity || "-"}</td>
+        <td style="padding: 10px; border-bottom: 1px solid #e5e7eb; text-align: right;">KSh ${item.unit_cost.toLocaleString("en-KE", { minimumFractionDigits: 2 })}</td>
+        <td style="padding: 10px; border-bottom: 1px solid #e5e7eb; text-align: right; font-weight: 600;">KSh ${item.line_total.toLocaleString("en-KE", { minimumFractionDigits: 2 })}</td>
       </tr>
-    `).join('');
+    `,
+      )
+      .join("");
 
     return `
       <!DOCTYPE html>
       <html>
       <head>
         <meta charset="utf-8">
-        <title>Goods Received Note - ${data.grn_number}</title>
+        <title>Goods Received Note - ${escapeHtml(data.grn_number)}</title>
         <style>
           @media print {
             body { margin: 0; }
@@ -210,25 +229,25 @@ export function GRNInvoiceDownload({ data, className }: GRNInvoiceDownloadProps)
           </div>
           <div class="grn-number">
             <h2>GRN Number</h2>
-            <p>${data.grn_number}</p>
+            <p>${escapeHtml(data.grn_number)}</p>
           </div>
         </div>
 
         <div class="info-grid">
           <div class="info-item">
             <label>Vendor</label>
-            <p>${data.vendor_name}</p>
+            <p>${escapeHtml(data.vendor_name)}</p>
           </div>
           <div class="info-item">
             <label>PO Number</label>
-            <p>${data.po_number}</p>
+            <p>${escapeHtml(data.po_number)}</p>
           </div>
           <div class="info-item">
             <label>Delivery Date</label>
-            <p>${new Date(data.delivery_date).toLocaleDateString('en-KE', { 
-              year: 'numeric', 
-              month: 'long', 
-              day: 'numeric' 
+            <p>${new Date(data.delivery_date).toLocaleDateString("en-KE", {
+              year: "numeric",
+              month: "long",
+              day: "numeric",
             })}</p>
           </div>
         </div>
@@ -258,17 +277,21 @@ export function GRNInvoiceDownload({ data, className }: GRNInvoiceDownloadProps)
             </div>
             <div class="totals-row total">
               <span>Total Value:</span>
-              <span>KSh ${data.total_value.toLocaleString('en-KE', { minimumFractionDigits: 2 })}</span>
+              <span>KSh ${data.total_value.toLocaleString("en-KE", { minimumFractionDigits: 2 })}</span>
             </div>
           </div>
         </div>
 
-        ${data.notes ? `
+        ${
+          data.notes
+            ? `
           <div class="notes">
             <h4>Delivery Notes</h4>
-            <p>${data.notes}</p>
+            <p>${escapeHtml(data.notes)}</p>
           </div>
-        ` : ''}
+        `
+            : ""
+        }
 
         <div class="signature-section">
           <div class="signature-box">
@@ -281,7 +304,7 @@ export function GRNInvoiceDownload({ data, className }: GRNInvoiceDownloadProps)
 
         <div class="footer">
           <p>This document serves as proof of goods received. Please retain for your records.</p>
-          <p>Generated on ${new Date().toLocaleString('en-KE')}</p>
+          <p>Generated on ${new Date().toLocaleString("en-KE")}</p>
         </div>
       </body>
       </html>
@@ -290,17 +313,17 @@ export function GRNInvoiceDownload({ data, className }: GRNInvoiceDownloadProps)
 
   const handleDownload = () => {
     const html = generateInvoiceHTML();
-    const blob = new Blob([html], { type: 'text/html' });
+    const blob = new Blob([html], { type: "text/html" });
     const url = URL.createObjectURL(blob);
-    
+
     // Open in new window for printing/saving
-    const printWindow = window.open(url, '_blank');
+    const printWindow = window.open(url, "_blank");
     if (printWindow) {
       printWindow.onload = () => {
         printWindow.print();
       };
     }
-    
+
     // Cleanup
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };

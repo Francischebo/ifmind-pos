@@ -15,7 +15,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { useEffect } from 'react';
-import ifmindLogo from '@/assets/ifmind-logo.png';
+import cfiLogo from '@/assets/cfi-pos-techiez-logo.png';
 
 export default function Landing() {
   const navigate = useNavigate();
@@ -83,11 +83,15 @@ export default function Landing() {
         <div className="container mx-auto px-4 sm:px-6">
           <div className="flex flex-col items-center text-center space-y-6 sm:space-y-8 animate-fade-in">
             <div className="flex justify-center mb-8">
-              <img src={ifmindLogo} alt="IFMind Technologies Ltd" className="h-24 sm:h-32 md:h-40 w-auto" />
+              <img
+                src={cfiLogo}
+                alt="CFI-POS Techiez Limited Company — Smart Point of Sale for Smart Businesses"
+                className="h-auto w-full max-w-3xl object-contain"
+              />
             </div>
             <h1 className="text-3xl sm:text-5xl md:text-6xl font-bold tracking-tight max-w-4xl">
-              Transform Your Wholesale Business with
-              <span className="text-primary block mt-2">IFMind-POS</span>
+              Run your business smarter with
+              <span className="text-primary block mt-2">CFI-POS Techiez</span>
             </h1>
             <p className="text-lg sm:text-xl text-muted-foreground max-w-2xl">
               The all-in-one point of sale system designed specifically for wholesale businesses.
@@ -108,7 +112,7 @@ export default function Landing() {
           <div className="text-center mb-12">
             <h2 className="text-2xl sm:text-4xl font-bold mb-4">Challenges We Solve</h2>
             <p className="text-muted-foreground text-lg max-w-2xl mx-auto">
-              Running a wholesale business is complex. IFMind-POS simplifies your daily operations.
+              Running a business is complex. CFI-POS Techiez simplifies your daily operations.
             </p>
           </div>
           <div className="grid sm:grid-cols-2 gap-6 max-w-5xl mx-auto">
@@ -168,7 +172,7 @@ export default function Landing() {
       <section className="py-12 sm:py-16 bg-gradient-to-br from-primary/5 to-accent/5 overflow-hidden">
         <div className="container mx-auto px-4 sm:px-6 animate-slide-in-left">
           <div className="text-center mb-12">
-            <h2 className="text-2xl sm:text-4xl font-bold mb-4">The IFMind Advantage</h2>
+            <h2 className="text-2xl sm:text-4xl font-bold mb-4">The CFI-POS Techiez Advantage</h2>
             <p className="text-muted-foreground text-lg max-w-2xl mx-auto">
               Measurable results that impact your bottom line from day one.
             </p>
@@ -184,11 +188,11 @@ export default function Landing() {
         </div>
       </section>
 
-      {/* Why Choose IFMind */}
+      {/* Why Choose CFI-POS Techiez */}
       <section className="py-20 bg-muted/50">
         <div className="container mx-auto px-4 sm:px-6">
           <div className="text-center max-w-3xl mx-auto mb-16">
-            <h2 className="text-2xl sm:text-4xl font-bold mb-4">Why Choose IFMind Technologies?</h2>
+            <h2 className="text-2xl sm:text-4xl font-bold mb-4">Why Choose CFI-POS Techiez?</h2>
             </div>
             <div className="grid sm:grid-cols-3 gap-8 text-center">
               <div>
@@ -223,7 +227,7 @@ export default function Landing() {
             Ready to Transform Your Business?
           </h2>
           <p className="text-lg sm:text-xl text-primary-foreground/90 mb-8 max-w-2xl mx-auto">
-            Join hundreds of wholesale businesses that trust IFMind-POS for their daily operations.
+            Join businesses that trust CFI-POS Techiez for their daily operations.
             Start your journey to streamlined success today.
           </p>
         </div>
@@ -232,9 +236,13 @@ export default function Landing() {
       {/* Footer */}
       <footer className="py-8 bg-muted/30 border-t">
         <div className="container mx-auto px-4 sm:px-6 text-center">
-          <img src={ifmindLogo} alt="IFMind Technologies Ltd" className="h-14 sm:h-16 w-auto mx-auto mb-4" />
+          <img
+            src={cfiLogo}
+            alt="CFI-POS Techiez Limited Company"
+            className="mx-auto mb-4 h-auto w-full max-w-xs object-contain"
+          />
           <p className="text-sm">
-            © 2024 IFMind Technologies Ltd. All rights reserved.
+            © {new Date().getFullYear()} CFI-POS Techiez Limited Company. All rights reserved.
           </p>
           <p className="text-sm text-muted-foreground mt-2">
             Professional Point of Sale Solutions for Modern Businesses

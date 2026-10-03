@@ -1,12 +1,11 @@
-import { useState, useEffect } from 'react';
-import { supabase } from '@/integrations/supabase/client';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Input } from '@/components/ui/input';
-import { ClipboardCheck, Search, Eye, CheckCircle, Package } from 'lucide-react';
-import { toast } from 'sonner';
-import { useAuth } from '@/hooks/useAuth';
+import { useState, useEffect } from "react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { ClipboardCheck, Search, Eye, Package } from "lucide-react";
+import { toast } from "sonner";
+import { ApiService } from "@/lib/api";
 import {
   Table,
   TableBody,
@@ -14,15 +13,15 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from '@/components/ui/table';
+} from "@/components/ui/table";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
-} from '@/components/ui/dialog';
-import { format } from 'date-fns';
-import { GRNInvoiceDownload } from '@/components/GRNInvoiceDownload';
+} from "@/components/ui/dialog";
+import { format } from "date-fns";
+import { GRNInvoiceDownload } from "@/components/GRNInvoiceDownload";
 
 interface DeliveryNote {
   id: string;
@@ -52,9 +51,8 @@ interface DeliveryNoteItem {
 }
 
 export default function DeliveryNotes() {
-  const { role } = useAuth();
   const [deliveryNotes, setDeliveryNotes] = useState<DeliveryNote[]>([]);
-  const [searchTerm, setSearchTerm] = useState('');
+  const [searchTerm, setSearchTerm] = useState("");
   const [loading, setLoading] = useState(true);
   const [selectedNote, setSelectedNote] = useState<DeliveryNote | null>(null);
   const [noteItems, setNoteItems] = useState<DeliveryNoteItem[]>([]);
@@ -65,25 +63,34 @@ export default function DeliveryNotes() {
 
   const loadDeliveryNotes = async () => {
     setLoading(true);
-    const { data, error } = await supabase
-      .from('delivery_notes')
-      .select('*, vendors(name), purchase_orders(po_number)')
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      toast.error('Failed to load delivery notes');
-    } else {
-      setDeliveryNotes(data || []);
+    try {
+      const data = await ApiService.get<any[]>("/delivery-notes");
+      setDeliveryNotes(
+        (data || []).map((note) => ({
+          ...note,
+          delivery_date: note.created_at,
+          vendors: note.vendor,
+          purchase_orders: note.purchase_order,
+        })),
+      );
+    } catch (error) {
+      toast.error("Failed to load delivery notes");
     }
     setLoading(false);
   };
 
   const loadNoteItems = async (noteId: string) => {
-    const { data } = await supabase
-      .from('delivery_note_items')
-      .select('*, products(name, sku)')
-      .eq('delivery_note_id', noteId);
-    setNoteItems(data || []);
+    try {
+      const note = await ApiService.get<any>(`/delivery-notes/${noteId}`);
+      setNoteItems(
+        (note.items || []).map((item: any) => ({
+          ...item,
+          products: item.product,
+        })),
+      );
+    } catch (error) {
+      toast.error("Failed to load delivery note items");
+    }
   };
 
   const handleViewNote = async (note: DeliveryNote) => {
@@ -91,42 +98,18 @@ export default function DeliveryNotes() {
     await loadNoteItems(note.id);
   };
 
-  const handleVerifyNote = async (noteId: string) => {
-    const { error } = await supabase
-      .from('delivery_notes')
-      .update({ status: 'verified' })
-      .eq('id', noteId);
-
-    if (error) {
-      toast.error('Failed to verify delivery note');
-    } else {
-      toast.success('Delivery note verified');
-      loadDeliveryNotes();
-    }
-  };
-
-  const handleCompleteNote = async (noteId: string) => {
-    // Call the process_delivery_note function to update stock
-    const { error } = await supabase.rpc('process_delivery_note', {
-      p_delivery_note_id: noteId,
-    });
-
-    if (error) {
-      toast.error('Failed to complete delivery note: ' + error.message);
-    } else {
-      toast.success('Delivery note completed and stock updated');
-      loadDeliveryNotes();
-      setSelectedNote(null);
-    }
-  };
-
   const getStatusColor = (status: string) => {
     switch (status) {
-      case 'pending': return 'secondary';
-      case 'verified': return 'default';
-      case 'completed': return 'default';
-      case 'disputed': return 'destructive';
-      default: return 'default';
+      case "pending":
+        return "secondary";
+      case "verified":
+        return "default";
+      case "completed":
+        return "default";
+      case "disputed":
+        return "destructive";
+      default:
+        return "default";
     }
   };
 
@@ -134,10 +117,10 @@ export default function DeliveryNotes() {
     (note) =>
       note.grn_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
       note.vendors?.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      note.purchase_orders?.po_number.toLowerCase().includes(searchTerm.toLowerCase())
+      note.purchase_orders?.po_number
+        .toLowerCase()
+        .includes(searchTerm.toLowerCase()),
   );
-
-  const isAdmin = role === 'admin';
 
   return (
     <div className="p-6 space-y-6">
@@ -147,7 +130,9 @@ export default function DeliveryNotes() {
             <ClipboardCheck className="h-8 w-8 text-primary" />
             Goods Received Notes
           </h1>
-          <p className="text-muted-foreground">Track deliveries from suppliers</p>
+          <p className="text-muted-foreground">
+            Track deliveries from suppliers
+          </p>
         </div>
       </div>
 
@@ -186,41 +171,50 @@ export default function DeliveryNotes() {
                 </TableRow>
               ) : filteredNotes.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
+                  <TableCell
+                    colSpan={8}
+                    className="text-center py-8 text-muted-foreground"
+                  >
                     No delivery notes found
                   </TableCell>
                 </TableRow>
               ) : (
                 filteredNotes.map((note) => (
                   <TableRow key={note.id}>
-                    <TableCell className="font-mono font-medium">{note.grn_number}</TableCell>
-                    <TableCell className="font-mono">{note.purchase_orders?.po_number || '-'}</TableCell>
-                    <TableCell>{note.vendors?.name || 'N/A'}</TableCell>
+                    <TableCell className="font-mono font-medium">
+                      {note.grn_number}
+                    </TableCell>
+                    <TableCell className="font-mono">
+                      {note.purchase_orders?.po_number || "-"}
+                    </TableCell>
+                    <TableCell>{note.vendors?.name || "N/A"}</TableCell>
                     <TableCell>{note.total_items}</TableCell>
                     <TableCell>
-                      KSh {note.total_value.toLocaleString('en-KE', { minimumFractionDigits: 2 })}
+                      KSh{" "}
+                      {note.total_value.toLocaleString("en-KE", {
+                        minimumFractionDigits: 2,
+                      })}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={getStatusColor(note.status)} className="capitalize">
+                      <Badge
+                        variant={getStatusColor(note.status)}
+                        className="capitalize"
+                      >
                         {note.status}
                       </Badge>
                     </TableCell>
-                    <TableCell>{format(new Date(note.delivery_date), 'dd/MM/yyyy')}</TableCell>
+                    <TableCell>
+                      {format(new Date(note.delivery_date), "dd/MM/yyyy")}
+                    </TableCell>
                     <TableCell className="text-right space-x-1">
-                      <Button size="sm" variant="ghost" onClick={() => handleViewNote(note)}>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        aria-label={`View GRN ${note.grn_number}`}
+                        onClick={() => handleViewNote(note)}
+                      >
                         <Eye className="h-4 w-4" />
                       </Button>
-                      {isAdmin && note.status === 'pending' && (
-                        <Button size="sm" variant="outline" onClick={() => handleVerifyNote(note.id)}>
-                          Verify
-                        </Button>
-                      )}
-                      {isAdmin && note.status === 'verified' && (
-                        <Button size="sm" onClick={() => handleCompleteNote(note.id)}>
-                          <CheckCircle className="h-4 w-4 mr-1" />
-                          Complete
-                        </Button>
-                      )}
                     </TableCell>
                   </TableRow>
                 ))
@@ -248,11 +242,16 @@ export default function DeliveryNotes() {
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">PO Number</p>
-                  <p className="font-medium">{selectedNote.purchase_orders?.po_number}</p>
+                  <p className="font-medium">
+                    {selectedNote.purchase_orders?.po_number}
+                  </p>
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Status</p>
-                  <Badge variant={getStatusColor(selectedNote.status)} className="capitalize">
+                  <Badge
+                    variant={getStatusColor(selectedNote.status)}
+                    className="capitalize"
+                  >
                     {selectedNote.status}
                   </Badge>
                 </div>
@@ -276,19 +275,31 @@ export default function DeliveryNotes() {
                     {noteItems.map((item) => (
                       <TableRow key={item.id}>
                         <TableCell>{item.products?.name}</TableCell>
-                        <TableCell className="font-mono">{item.products?.sku}</TableCell>
-                        <TableCell className="text-right">{item.ordered_quantity}</TableCell>
+                        <TableCell className="font-mono">
+                          {item.products?.sku}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {item.ordered_quantity}
+                        </TableCell>
                         <TableCell className="text-right text-green-600 font-medium">
                           {item.received_quantity}
                         </TableCell>
                         <TableCell className="text-right text-destructive">
-                          {item.rejected_quantity > 0 ? item.rejected_quantity : '-'}
+                          {item.rejected_quantity > 0
+                            ? item.rejected_quantity
+                            : "-"}
                         </TableCell>
                         <TableCell className="text-right">
-                          KSh {item.unit_cost.toLocaleString('en-KE', { minimumFractionDigits: 2 })}
+                          KSh{" "}
+                          {item.unit_cost.toLocaleString("en-KE", {
+                            minimumFractionDigits: 2,
+                          })}
                         </TableCell>
                         <TableCell className="text-right font-medium">
-                          KSh {item.line_total.toLocaleString('en-KE', { minimumFractionDigits: 2 })}
+                          KSh{" "}
+                          {item.line_total.toLocaleString("en-KE", {
+                            minimumFractionDigits: 2,
+                          })}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -300,22 +311,25 @@ export default function DeliveryNotes() {
                 <div>
                   <p className="text-sm text-muted-foreground">Total Value</p>
                   <p className="text-2xl font-bold">
-                    KSh {selectedNote.total_value.toLocaleString('en-KE', { minimumFractionDigits: 2 })}
+                    KSh{" "}
+                    {selectedNote.total_value.toLocaleString("en-KE", {
+                      minimumFractionDigits: 2,
+                    })}
                   </p>
                 </div>
                 <div className="flex gap-2">
                   <GRNInvoiceDownload
                     data={{
                       grn_number: selectedNote.grn_number,
-                      po_number: selectedNote.purchase_orders?.po_number || '',
-                      vendor_name: selectedNote.vendors?.name || '',
+                      po_number: selectedNote.purchase_orders?.po_number || "",
+                      vendor_name: selectedNote.vendors?.name || "",
                       delivery_date: selectedNote.delivery_date,
                       total_value: selectedNote.total_value,
                       total_items: selectedNote.total_items,
                       notes: selectedNote.notes || undefined,
-                      items: noteItems.map(item => ({
-                        product_name: item.products?.name || '',
-                        sku: item.products?.sku || '',
+                      items: noteItems.map((item) => ({
+                        product_name: item.products?.name || "",
+                        sku: item.products?.sku || "",
                         ordered_quantity: item.ordered_quantity,
                         received_quantity: item.received_quantity,
                         rejected_quantity: item.rejected_quantity,
@@ -324,12 +338,6 @@ export default function DeliveryNotes() {
                       })),
                     }}
                   />
-                  {isAdmin && selectedNote.status === 'verified' && (
-                    <Button onClick={() => handleCompleteNote(selectedNote.id)}>
-                      <CheckCircle className="h-4 w-4 mr-2" />
-                      Complete & Update Stock
-                    </Button>
-                  )}
                 </div>
               </div>
             </div>

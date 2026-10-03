@@ -46,9 +46,21 @@ export const apiRateLimiter = new RateLimiter(60000, 30); // 30 requests per min
 export const paymentRateLimiter = new RateLimiter(300000, 5); // 5 payment requests per 5 minutes
 
 // Input validation functions
+export const normalizeKenyanPhoneNumber = (phone: string): string | null => {
+  const cleaned = String(phone ?? '').trim().replace(/\s+/g, '');
+  if (!cleaned) return null;
+
+  const withoutPlus = cleaned.replace(/^\+/, '');
+
+  if (/^254[1-9]\d{8}$/.test(withoutPlus)) return withoutPlus;
+  if (/^0[1-9]\d{8}$/.test(withoutPlus)) return `254${withoutPlus.slice(1)}`;
+  if (/^[1-9]\d{8}$/.test(withoutPlus)) return `254${withoutPlus}`;
+
+  return null;
+};
+
 export const validatePhoneNumber = (phone: string): boolean => {
-  const kenyaPhoneRegex = /^254[0-9]{9}$/;
-  return kenyaPhoneRegex.test(phone.replace(/\s+/g, ''));
+  return normalizeKenyanPhoneNumber(phone) !== null;
 };
 
 export const validateEmail = (email: string): boolean => {
@@ -99,7 +111,7 @@ export const validateInputWithSchema = async (data: any, schemaType: string): Pr
 // Secure local storage wrapper with encryption
 export class SecureStorage {
   private static instance: SecureStorage;
-  private encryptionKey = 'pos_secure_key_12345678901234567'; // Must be 32 chars for 256-bit AES
+  private keyPromise: Promise<CryptoKey> | null = null;
 
   static getInstance(): SecureStorage {
     if (!SecureStorage.instance) {
@@ -108,9 +120,24 @@ export class SecureStorage {
     return SecureStorage.instance;
   }
 
+  private getEncryptionKey(): Promise<CryptoKey> {
+    if (!this.keyPromise) {
+      this.keyPromise = (async () => {
+        const storedKey = sessionStorage.getItem('pos_session_key');
+        const material = storedKey || crypto.getRandomValues(new Uint8Array(32)).reduce((acc, x) => acc + x.toString(16).padStart(2, '0'), '');
+        if (!storedKey) {
+          sessionStorage.setItem('pos_session_key', material);
+        }
+
+        const keyBytes = new TextEncoder().encode(material.slice(0, 32));
+        return crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['encrypt', 'decrypt']);
+      })();
+    }
+    return this.keyPromise;
+  }
+
   async setItem(key: string, value: any): Promise<void> {
     try {
-      // Use Web Crypto API for proper encryption
       const encrypted = await this.encryptData(JSON.stringify(value));
       localStorage.setItem(key, encrypted);
     } catch (error) {
@@ -138,18 +165,13 @@ export class SecureStorage {
 
   clear(): void {
     localStorage.clear();
+    sessionStorage.removeItem('pos_session_key');
   }
 
   private async encryptData(data: string): Promise<string> {
     const encoder = new TextEncoder();
     const dataBuffer = encoder.encode(data);
-    const key = await crypto.subtle.importKey(
-      'raw',
-      encoder.encode(this.encryptionKey),
-      'AES-GCM',
-      false,
-      ['encrypt']
-    );
+    const key = await this.getEncryptionKey();
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const encrypted = await crypto.subtle.encrypt(
       { name: 'AES-GCM', iv },
@@ -161,13 +183,7 @@ export class SecureStorage {
 
   private async decryptData(encryptedData: string): Promise<string> {
     const { iv, data } = JSON.parse(atob(encryptedData));
-    const key = await crypto.subtle.importKey(
-      'raw',
-      new TextEncoder().encode(this.encryptionKey),
-      'AES-GCM',
-      false,
-      ['decrypt']
-    );
+    const key = await this.getEncryptionKey();
     const decrypted = await crypto.subtle.decrypt(
       { name: 'AES-GCM', iv: new Uint8Array(iv) },
       key,

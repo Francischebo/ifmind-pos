@@ -1,15 +1,15 @@
-import { useState, useEffect } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
-import { ApiService } from '@/lib/api';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { toast } from 'sonner';
-import { ArrowLeft, Package, AlertTriangle } from 'lucide-react';
-import { useAuth } from '@/hooks/useAuth';
-import { Badge } from '@/components/ui/badge';
+import { useState, useEffect } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import { ApiService } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { toast } from "sonner";
+import { ArrowLeft, Package, AlertTriangle } from "lucide-react";
+import { useAuth } from "@/hooks/useAuth";
+import { Badge } from "@/components/ui/badge";
 
 interface POItem {
   id: string;
@@ -35,6 +35,8 @@ interface PurchaseOrder {
   id: string;
   po_number: string;
   vendor_id: string;
+  warehouse_id: string | null;
+  warehouse: { name: string } | null;
   total_amount: number;
   vendors: { name: string } | null;
 }
@@ -46,12 +48,12 @@ export default function ReceivePurchaseOrder() {
   const [loading, setLoading] = useState(false);
   const [po, setPO] = useState<PurchaseOrder | null>(null);
   const [items, setItems] = useState<ReceiveItem[]>([]);
-  const [notes, setNotes] = useState('');
+  const [notes, setNotes] = useState("");
 
   useEffect(() => {
-    if (role !== 'admin') {
-      toast.error('Access denied');
-      navigate('/purchase-orders');
+    if (role !== "admin") {
+      toast.error("Access denied");
+      navigate("/purchase-orders");
       return;
     }
     loadPO();
@@ -66,54 +68,68 @@ export default function ReceivePurchaseOrder() {
         setPO(data);
 
         // Initialize receiving quantities
-        const receiveItems: ReceiveItem[] = (data.items || []).map((item: any) => ({
-          ...item,
-          product_id: item.product.id,
-          products: item.product,
-          receiving_quantity: item.quantity - (item.received_quantity || 0),
-          batch_number: '',
-          expiry_date: '',
-          manufacturing_date: '',
-          supplier_batch_reference: '',
-          environmental_conditions: '',
-          rejection_reason: '',
-          rejected_quantity: 0,
-        }));
+        const receiveItems: ReceiveItem[] = (data.items || []).map(
+          (item: any) => ({
+            ...item,
+            product_id: item.product.id,
+            products: item.product,
+            receiving_quantity: item.quantity - (item.received_quantity || 0),
+            batch_number: "",
+            expiry_date: "",
+            manufacturing_date: "",
+            supplier_batch_reference: "",
+            environmental_conditions: "",
+            rejection_reason: "",
+            rejected_quantity: 0,
+          }),
+        );
 
         setItems(receiveItems);
       }
     } catch (error) {
       console.error(error);
-      toast.error('Failed to load purchase order details');
+      toast.error("Failed to load purchase order details");
     }
   };
 
   const updateReceivingQuantity = (itemId: string, value: number) => {
-    setItems(items.map(item => 
-      item.id === itemId 
-        ? { 
-            ...item, 
-            receiving_quantity: Math.min(value, item.quantity - (item.received_quantity || 0)),
-            rejected_quantity: Math.max(0, (item.quantity - (item.received_quantity || 0)) - value)
-          }
-        : item
-    ));
+    setItems(
+      items.map((item) =>
+        item.id === itemId
+          ? {
+              ...item,
+              receiving_quantity: Math.min(
+                value,
+                item.quantity - (item.received_quantity || 0),
+              ),
+              rejected_quantity: Math.max(
+                0,
+                item.quantity - (item.received_quantity || 0) - value,
+              ),
+            }
+          : item,
+      ),
+    );
   };
 
-  const updateItemField = (itemId: string, field: keyof ReceiveItem, value: any) => {
-    setItems(items.map(item => 
-      item.id === itemId 
-        ? { ...item, [field]: value }
-        : item
-    ));
+  const updateItemField = (
+    itemId: string,
+    field: keyof ReceiveItem,
+    value: any,
+  ) => {
+    setItems(
+      items.map((item) =>
+        item.id === itemId ? { ...item, [field]: value } : item,
+      ),
+    );
   };
 
   const handleReceive = async () => {
     if (!po || !user?.id) return;
 
-    const hasItemsToReceive = items.some(item => item.receiving_quantity > 0);
+    const hasItemsToReceive = items.some((item) => item.receiving_quantity > 0);
     if (!hasItemsToReceive) {
-      toast.error('No items to receive');
+      toast.error("No items to receive");
       return;
     }
 
@@ -123,7 +139,7 @@ export default function ReceivePurchaseOrder() {
       const payload = {
         user_id: user.id,
         notes: notes,
-        items: items.map(item => ({
+        items: items.map((item) => ({
           po_item_id: item.id,
           product_id: item.product_id,
           ordered_quantity: item.quantity,
@@ -135,17 +151,20 @@ export default function ReceivePurchaseOrder() {
           expiry_date: item.expiry_date,
           manufacturing_date: item.manufacturing_date,
           supplier_batch_reference: item.supplier_batch_reference,
-          environmental_conditions: item.environmental_conditions
-        }))
+          environmental_conditions: item.environmental_conditions,
+        })),
       };
 
-      const response = await ApiService.post(`/purchase-orders/${po.id}/receive`, payload);
+      const response = await ApiService.post<{ grn: string }>(
+        `/purchase-orders/${po.id}/receive`,
+        payload,
+      );
 
       toast.success(`Goods received successfully. GRN: ${response.grn}`);
-      navigate('/purchase-orders'); // or delivery-notes if that exists in frontend
+      navigate("/purchase-orders"); // or delivery-notes if that exists in frontend
     } catch (error: any) {
-      console.error('Error receiving goods:', error);
-      toast.error(error.message || 'Server error while receiving goods');
+      console.error("Error receiving goods:", error);
+      toast.error(error.message || "Server error while receiving goods");
     } finally {
       setLoading(false);
     }
@@ -165,14 +184,15 @@ export default function ReceivePurchaseOrder() {
   return (
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
       <div className="flex items-center gap-4">
-        <Button variant="ghost" onClick={() => navigate('/purchase-orders')}>
+        <Button variant="ghost" onClick={() => navigate("/purchase-orders")}>
           <ArrowLeft className="h-4 w-4 mr-2" />
           Back
         </Button>
         <div>
           <h1 className="text-3xl font-bold">Receive Goods</h1>
           <p className="text-muted-foreground">
-            PO #{po.po_number} - {(po as any).vendor?.name || po.vendors?.name}
+            PO #{po.po_number} - {(po as any).vendor?.name || po.vendors?.name}{" "}
+            · Receiving at {po.warehouse?.name || "Main warehouse"}
           </p>
         </div>
       </div>
@@ -186,14 +206,17 @@ export default function ReceivePurchaseOrder() {
         </CardHeader>
         <CardContent className="space-y-6">
           {items.map((item) => {
-            const remainingToReceive = item.quantity - (item.received_quantity || 0);
+            const remainingToReceive =
+              item.quantity - (item.received_quantity || 0);
             const isPartiallyReceived = (item.received_quantity || 0) > 0;
-            
+
             return (
               <div key={item.id} className="p-4 border rounded-lg space-y-4">
                 <div className="flex justify-between items-start">
                   <div>
-                    <h3 className="font-semibold text-lg">{item.products?.name}</h3>
+                    <h3 className="font-semibold text-lg">
+                      {item.products?.name}
+                    </h3>
                     <div className="flex gap-2 mt-1">
                       <Badge variant="outline">
                         Current Stock: {item.products?.stock_on_hand || 0}
@@ -206,21 +229,32 @@ export default function ReceivePurchaseOrder() {
                     </div>
                   </div>
                   <div className="text-right">
-                    <p className="text-sm text-muted-foreground">Ordered / Remaining</p>
-                    <p className="text-2xl font-bold">{item.quantity} / {remainingToReceive}</p>
+                    <p className="text-sm text-muted-foreground">
+                      Ordered / Remaining
+                    </p>
+                    <p className="text-2xl font-bold">
+                      {item.quantity} / {remainingToReceive}
+                    </p>
                   </div>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 mb-4">
                   <div className="space-y-2">
-                    <Label htmlFor={`receiving-${item.id}`}>Receiving Quantity</Label>
+                    <Label htmlFor={`receiving-${item.id}`}>
+                      Receiving Quantity
+                    </Label>
                     <Input
                       id={`receiving-${item.id}`}
                       type="number"
                       min="0"
                       max={remainingToReceive}
                       value={item.receiving_quantity}
-                      onChange={(e) => updateReceivingQuantity(item.id, parseInt(e.target.value) || 0)}
+                      onChange={(e) =>
+                        updateReceivingQuantity(
+                          item.id,
+                          parseInt(e.target.value) || 0,
+                        )
+                      }
                       className="text-lg font-semibold"
                     />
                   </div>
@@ -229,25 +263,43 @@ export default function ReceivePurchaseOrder() {
                     <Input
                       id={`batch-${item.id}`}
                       value={item.batch_number}
-                      onChange={(e) => updateItemField(item.id, 'batch_number', e.target.value)}
+                      onChange={(e) =>
+                        updateItemField(item.id, "batch_number", e.target.value)
+                      }
                       placeholder="Optional"
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor={`supplier-ref-${item.id}`}>Supplier Batch Ref</Label>
+                    <Label htmlFor={`supplier-ref-${item.id}`}>
+                      Supplier Batch Ref
+                    </Label>
                     <Input
                       id={`supplier-ref-${item.id}`}
                       value={item.supplier_batch_reference}
-                      onChange={(e) => updateItemField(item.id, 'supplier_batch_reference', e.target.value)}
+                      onChange={(e) =>
+                        updateItemField(
+                          item.id,
+                          "supplier_batch_reference",
+                          e.target.value,
+                        )
+                      }
                       placeholder="Optional"
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor={`env-cond-${item.id}`}>Env Conditions</Label>
+                    <Label htmlFor={`env-cond-${item.id}`}>
+                      Env Conditions
+                    </Label>
                     <Input
                       id={`env-cond-${item.id}`}
                       value={item.environmental_conditions}
-                      onChange={(e) => updateItemField(item.id, 'environmental_conditions', e.target.value)}
+                      onChange={(e) =>
+                        updateItemField(
+                          item.id,
+                          "environmental_conditions",
+                          e.target.value,
+                        )
+                      }
                       placeholder="e.g. Keep frozen"
                     />
                   </div>
@@ -257,7 +309,13 @@ export default function ReceivePurchaseOrder() {
                       id={`mfg-${item.id}`}
                       type="date"
                       value={item.manufacturing_date}
-                      onChange={(e) => updateItemField(item.id, 'manufacturing_date', e.target.value)}
+                      onChange={(e) =>
+                        updateItemField(
+                          item.id,
+                          "manufacturing_date",
+                          e.target.value,
+                        )
+                      }
                     />
                   </div>
                   <div className="space-y-2">
@@ -266,13 +324,15 @@ export default function ReceivePurchaseOrder() {
                       id={`expiry-${item.id}`}
                       type="date"
                       value={item.expiry_date}
-                      onChange={(e) => updateItemField(item.id, 'expiry_date', e.target.value)}
+                      onChange={(e) =>
+                        updateItemField(item.id, "expiry_date", e.target.value)
+                      }
                     />
                   </div>
                   <div className="space-y-2 md:col-span-1 lg:col-span-2">
                     <Label>Line Total</Label>
                     <Input
-                      value={`KSh ${(item.receiving_quantity * item.unit_cost).toLocaleString('en-KE', { minimumFractionDigits: 2 })}`}
+                      value={`KSh ${(item.receiving_quantity * item.unit_cost).toLocaleString("en-KE", { minimumFractionDigits: 2 })}`}
                       disabled
                     />
                   </div>
@@ -284,14 +344,26 @@ export default function ReceivePurchaseOrder() {
                       <AlertTriangle className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
                       <div className="flex-1 space-y-2">
                         <p className="text-sm text-amber-800 dark:text-amber-200">
-                          Partial receipt: {item.receiving_quantity} of {remainingToReceive} remaining
+                          Partial receipt: {item.receiving_quantity} of{" "}
+                          {remainingToReceive} remaining
                         </p>
                         <div className="space-y-1">
-                          <Label htmlFor={`rejection-${item.id}`} className="text-xs">Rejection Reason (if applicable)</Label>
+                          <Label
+                            htmlFor={`rejection-${item.id}`}
+                            className="text-xs"
+                          >
+                            Rejection Reason (if applicable)
+                          </Label>
                           <Input
                             id={`rejection-${item.id}`}
                             value={item.rejection_reason}
-                            onChange={(e) => updateItemField(item.id, 'rejection_reason', e.target.value)}
+                            onChange={(e) =>
+                              updateItemField(
+                                item.id,
+                                "rejection_reason",
+                                e.target.value,
+                              )
+                            }
                             placeholder="e.g., Damaged, Wrong item, Quality issue"
                             className="bg-white dark:bg-background"
                           />
@@ -317,17 +389,29 @@ export default function ReceivePurchaseOrder() {
 
           <div className="flex justify-between items-center pt-4 border-t">
             <div>
-              <p className="text-sm text-muted-foreground">Total Receiving Value</p>
+              <p className="text-sm text-muted-foreground">
+                Total Receiving Value
+              </p>
               <p className="text-2xl font-bold">
-                KSh {items.reduce((sum, item) => sum + (item.receiving_quantity * item.unit_cost), 0).toLocaleString('en-KE', { minimumFractionDigits: 2 })}
+                KSh{" "}
+                {items
+                  .reduce(
+                    (sum, item) =>
+                      sum + item.receiving_quantity * item.unit_cost,
+                    0,
+                  )
+                  .toLocaleString("en-KE", { minimumFractionDigits: 2 })}
               </p>
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" onClick={() => navigate('/purchase-orders')}>
+              <Button
+                variant="outline"
+                onClick={() => navigate("/purchase-orders")}
+              >
                 Cancel
               </Button>
               <Button onClick={handleReceive} disabled={loading}>
-                {loading ? 'Processing...' : 'Confirm Receipt & Create GRN'}
+                {loading ? "Processing..." : "Confirm Receipt & Create GRN"}
               </Button>
             </div>
           </div>

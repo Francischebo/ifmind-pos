@@ -1,15 +1,27 @@
+interface SerialPortConnection {
+  open(options: { baudRate: number }): Promise<void>;
+  close(): Promise<void>;
+  writable?: WritableStream<Uint8Array> | null;
+}
+
+interface WebSerialApi {
+  requestPort(): Promise<SerialPortConnection>;
+  getPorts(): Promise<SerialPortConnection[]>;
+}
+
 export class WebPrinterService {
-  private port: SerialPort | null = null;
+  private port: SerialPortConnection | null = null;
   private writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
 
   async requestPermission(): Promise<boolean> {
     try {
-      if (!('serial' in navigator)) {
+      const serial = (navigator as Navigator & { serial?: WebSerialApi }).serial;
+      if (!serial) {
         console.error('Web Serial API not supported in this browser.');
         return false;
       }
       
-      this.port = await navigator.serial.requestPort();
+      this.port = await serial.requestPort();
       await this.port.open({ baudRate: 9600 });
       this.writer = this.port.writable?.getWriter() || null;
       
@@ -22,9 +34,10 @@ export class WebPrinterService {
 
   async connectToPairedPrinter(): Promise<boolean> {
     try {
-      if (!('serial' in navigator)) return false;
+      const serial = (navigator as Navigator & { serial?: WebSerialApi }).serial;
+      if (!serial) return false;
       
-      const ports = await navigator.serial.getPorts();
+      const ports = await serial.getPorts();
       if (ports.length > 0) {
         this.port = ports[0];
         await this.port.open({ baudRate: 9600 });
