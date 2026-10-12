@@ -22,6 +22,10 @@ interface EnhancedReceiptProps {
   paymentMethod: string;
   customerName?: string;
   cashierName: string;
+  etims_status?: string | null;
+  etims_receipt_no?: string | null;
+  etims_qr_code?: string | null;
+  etims_signature?: string | null;
 }
 
 export function EnhancedReceipt({
@@ -35,6 +39,10 @@ export function EnhancedReceipt({
   paymentMethod,
   customerName = 'Walk-in Customer',
   cashierName,
+  etims_status,
+  etims_receipt_no,
+  etims_qr_code,
+  etims_signature,
 }: EnhancedReceiptProps) {
   const receiptRef = useRef<HTMLDivElement>(null);
 
@@ -143,6 +151,51 @@ export function EnhancedReceipt({
               <span>TOTAL:</span>
               <span>KSh {total.toLocaleString('en-KE', { minimumFractionDigits: 2 })}</span>
             </div>
+          </div>
+
+          {/* eTIMS Fiscal Section */}
+          <div className="border-t-2 border-dashed pt-3 text-center text-xs space-y-1">
+            {etims_status === "submitted" && etims_receipt_no ? (
+              <div className="space-y-1">
+                <div className="font-semibold text-primary">KRA eTIMS Fiscal Receipt</div>
+                <div className="font-mono text-[11px]">Invoice No: {etims_receipt_no}</div>
+                {etims_signature && (
+                  <div className="font-mono text-[10px] text-muted-foreground break-all">
+                    Sig: {etims_signature}
+                  </div>
+                )}
+                {etims_qr_code && (
+                  <div className="py-2 flex flex-col items-center justify-center">
+                    <img
+                      src={`https://api.qrserver.com/v1/create-qr-code/?size=110x110&data=${encodeURIComponent(etims_qr_code)}`}
+                      alt="eTIMS Verification QR"
+                      className="w-24 h-24 mx-auto border p-1 rounded bg-white"
+                      loading="lazy"
+                    />
+                    <a
+                      href={etims_qr_code}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[10px] text-blue-600 underline mt-1 break-all"
+                    >
+                      Verify with KRA
+                    </a>
+                  </div>
+                )}
+              </div>
+            ) : etims_status === "pending" ? (
+              <div className="text-amber-600 dark:text-amber-400 font-medium py-1">
+                Fiscal receipt pending - receipt will be available shortly
+              </div>
+            ) : etims_status === "failed" ? (
+              <div className="text-destructive font-medium py-1">
+                Fiscal submission pending verification
+              </div>
+            ) : (
+              <div className="text-muted-foreground italic py-1">
+                Non-fiscal receipt
+              </div>
+            )}
           </div>
 
           {/* Footer */}

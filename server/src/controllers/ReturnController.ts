@@ -13,7 +13,8 @@ import { WarehouseStock } from "../entity/WarehouseStock";
 import { Shift, ShiftStatus } from "../entity/Shift";
 import { AccountingService } from "../services/AccountingService";
 import { InventoryService } from "../services/InventoryService";
-import { EtimsMockService } from "../services/EtimsMockService";
+import { EtimsStatus } from "../entity/Sale";
+import { EtimsService } from "../services/etims/EtimsService";
 import { SocketService } from "../services/SocketService";
 import { StoreCredit, StoreCreditStatus } from "../entity/StoreCredit";
 import { Customer } from "../entity/Customer";
@@ -576,12 +577,14 @@ export class ReturnController {
             creditNote.amount = totalRefundAmount;
             creditNote.reason = returnReq.reason;
             creditNote.cashier = admin;
-            await queryRunner.manager.save(creditNote);
-
-            const etimsData = await EtimsMockService.signCreditNote(creditNote);
-            creditNote.etims_note_no = etimsData.note_no;
-            creditNote.etims_qr_code = etimsData.qr_code;
-            creditNote.etims_signature = etimsData.signature;
+            const etimsMode = EtimsService.resolveEtimsMode();
+            creditNote.etims_status = etimsMode === "off" ? EtimsStatus.NOT_APPLICABLE : EtimsStatus.PENDING;
+            creditNote.etims_attempts = 0;
+            creditNote.etims_last_error = null;
+            creditNote.etims_submitted_at = null;
+            creditNote.etims_note_no = null;
+            creditNote.etims_qr_code = null;
+            creditNote.etims_signature = null;
             await queryRunner.manager.save(creditNote);
 
             const settlement = {
@@ -643,13 +646,25 @@ export class ReturnController {
 
             await queryRunner.commitTransaction();
 
+            let finalCreditNote = creditNote;
+            if (creditNote.etims_status === EtimsStatus.PENDING) {
+                try {
+                    const signed = await EtimsService.processCreditNoteSigning(creditNote.id);
+                    if (signed) {
+                        finalCreditNote = signed;
+                    }
+                } catch (err) {
+                    console.error("Asynchronous eTIMS credit note signing failed:", err);
+                }
+            }
+
             for (const update of inventoryUpdates) {
                 SocketService.emitInventoryUpdated(update.productId, update.newStockLevel, update.warehouseId || undefined);
             }
 
             res.status(200).json({ 
                 message: "Return approved securely.", 
-                creditNote, 
+                creditNote: finalCreditNote, 
                 mpesaRefundPending: returnReq.refund_method === RefundMethod.MPESA,
                 storeCreditBarcode: generatedStoreCredit ? generatedStoreCredit.barcode : null
             });

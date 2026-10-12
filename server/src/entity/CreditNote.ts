@@ -1,5 +1,5 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, JoinColumn, OneToOne } from "typeorm";
-import { Sale } from "./Sale";
+import { Sale, EtimsStatus } from "./Sale";
 import { User } from "./User";
 import { ReturnRequest } from "./ReturnRequest";
 
@@ -17,6 +17,18 @@ export class CreditNote {
 
     @Column("text")
     reason: string;
+
+    @Column({ type: "varchar", length: 32, default: "not_applicable" })
+    etims_status: EtimsStatus;
+
+    @Column("int", { default: 0 })
+    etims_attempts: number;
+
+    @Column("text", { nullable: true })
+    etims_last_error: string | null;
+
+    @Column({ type: "timestamptz", nullable: true })
+    etims_submitted_at: Date | null;
 
     @Column({ type: "varchar", nullable: true })
     etims_note_no: string | null;

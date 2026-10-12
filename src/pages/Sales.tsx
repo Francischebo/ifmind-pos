@@ -40,6 +40,7 @@ import {
   Plus,
   PauseCircle,
   PlayCircle,
+  FileText,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -156,6 +157,58 @@ export default function Sales() {
   const [parkedSales, setParkedSales] = useState<ParkedSale[]>([]);
   const [showParkedModal, setShowParkedModal] = useState(false);
   const barcodeInputRef = useRef<HTMLInputElement>(null);
+
+  interface HistoricalSale {
+    id: string;
+    created_at: string;
+    total_amount: number | string;
+    payment_method: string;
+    etims_status?: string | null;
+    etims_receipt_no?: string | null;
+    etims_last_error?: string | null;
+    customer?: { name: string } | null;
+    cashier?: { email: string; profile?: { full_name: string } } | null;
+    items?: { quantity: number }[];
+  }
+
+  const [showSalesHistoryModal, setShowSalesHistoryModal] = useState(false);
+  const [salesHistory, setSalesHistory] = useState<HistoricalSale[]>([]);
+  const [loadingSalesHistory, setLoadingSalesHistory] = useState(false);
+  const [etimsFilter, setEtimsFilter] = useState("all");
+
+  const fetchSalesHistory = useCallback(async (filter: string) => {
+    try {
+      setLoadingSalesHistory(true);
+      const url = filter === "all" ? "/sales" : `/sales?etims_status=${filter}`;
+      const data = await ApiService.get<HistoricalSale[]>(url);
+      setSalesHistory(Array.isArray(data) ? data : []);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Failed to load sales history";
+      toast.error(msg);
+    } finally {
+      setLoadingSalesHistory(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (showSalesHistoryModal) {
+      void fetchSalesHistory(etimsFilter);
+    }
+  }, [showSalesHistoryModal, etimsFilter, fetchSalesHistory]);
+
+  const renderEtimsBadge = (status?: string | null) => {
+    switch (status) {
+      case "submitted":
+        return <Badge className="bg-green-600 hover:bg-green-700 text-white">Submitted</Badge>;
+      case "pending":
+        return <Badge className="bg-amber-500 hover:bg-amber-600 text-white">Pending</Badge>;
+      case "failed":
+        return <Badge variant="destructive">Failed</Badge>;
+      case "not_applicable":
+      default:
+        return <Badge variant="secondary" className="bg-muted-foreground/30 text-foreground">N/A</Badge>;
+    }
+  };
 
   // Loyalty redemption state
   const [loyaltyDiscount, setLoyaltyDiscount] = useState(0);
@@ -946,6 +999,15 @@ export default function Sales() {
           </div>
           <div className="flex flex-col items-end gap-2">
             <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1.5"
+                onClick={() => setShowSalesHistoryModal(true)}
+              >
+                <FileText className="h-4 w-4" />
+                Sales History & eTIMS
+              </Button>
               <Select
                 value={selectedWarehouse}
                 onValueChange={setSelectedWarehouse}
@@ -1423,6 +1485,95 @@ export default function Sales() {
                   </Button>
                 </div>
               ))
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Sales History & eTIMS Fiscal Log Modal */}
+      <Dialog open={showSalesHistoryModal} onOpenChange={setShowSalesHistoryModal}>
+        <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col">
+          <DialogHeader>
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pr-6">
+              <div>
+                <DialogTitle className="text-xl">Sales History & eTIMS Fiscal Log</DialogTitle>
+                <DialogDescription>
+                  Monitor sales transactions and KRA eTIMS fiscal submission statuses.
+                </DialogDescription>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-medium text-muted-foreground">Filter eTIMS:</span>
+                <Select value={etimsFilter} onValueChange={setEtimsFilter}>
+                  <SelectTrigger className="w-[160px] h-8 text-xs">
+                    <SelectValue placeholder="All Statuses" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Statuses</SelectItem>
+                    <SelectItem value="submitted">Submitted</SelectItem>
+                    <SelectItem value="pending">Pending</SelectItem>
+                    <SelectItem value="failed">Failed</SelectItem>
+                    <SelectItem value="not_applicable">Not Applicable</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </DialogHeader>
+
+          <div className="flex-1 overflow-y-auto mt-2 border rounded-md">
+            {loadingSalesHistory ? (
+              <div className="p-8 text-center text-sm text-muted-foreground">
+                Loading sales records...
+              </div>
+            ) : salesHistory.length === 0 ? (
+              <div className="p-8 text-center text-sm text-muted-foreground">
+                No sales found matching the selected filter.
+              </div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Receipt / Ref</TableHead>
+                    <TableHead>Date</TableHead>
+                    <TableHead>Customer</TableHead>
+                    <TableHead>Cashier</TableHead>
+                    <TableHead className="text-right">Total (KSh)</TableHead>
+                    <TableHead>Payment</TableHead>
+                    <TableHead>eTIMS Status</TableHead>
+                    <TableHead className="text-right">Action</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {salesHistory.map((s) => (
+                    <TableRow key={s.id}>
+                      <TableCell className="font-mono text-xs font-semibold">
+                        {s.id.slice(0, 8).toUpperCase()}
+                      </TableCell>
+                      <TableCell className="text-xs">
+                        {new Date(s.created_at).toLocaleString("en-KE", { dateStyle: "short", timeStyle: "short" })}
+                      </TableCell>
+                      <TableCell className="text-xs">{s.customer?.name || "Walk-in"}</TableCell>
+                      <TableCell className="text-xs">{s.cashier?.profile?.full_name || s.cashier?.email || "—"}</TableCell>
+                      <TableCell className="text-xs text-right font-medium">
+                        {Number(s.total_amount).toLocaleString("en-KE", { minimumFractionDigits: 2 })}
+                      </TableCell>
+                      <TableCell className="text-xs uppercase">{s.payment_method}</TableCell>
+                      <TableCell>{renderEtimsBadge(s.etims_status)}</TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 px-2 text-xs"
+                          onClick={() => {
+                            setCompletedSaleId(s.id);
+                          }}
+                        >
+                          View Receipt
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             )}
           </div>
         </DialogContent>

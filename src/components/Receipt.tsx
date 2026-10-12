@@ -35,6 +35,10 @@ interface Sale {
   loyalty_discount: number | null;
   loyalty_points_redeemed: number | null;
   loyalty_points_earned: number | null;
+  etims_status?: string | null;
+  etims_receipt_no?: string | null;
+  etims_qr_code?: string | null;
+  etims_signature?: string | null;
   sale_items: {
     quantity: number;
     unit_price: number;
@@ -78,6 +82,10 @@ interface ServerSale {
   mpesa_amount: number | string | null;
   change_amount: number | string | null;
   loyalty_discount: number | string | null;
+  etims_status?: string | null;
+  etims_receipt_no?: string | null;
+  etims_qr_code?: string | null;
+  etims_signature?: string | null;
   items: ServerSaleItem[];
   customer: {
     id: string;
@@ -126,6 +134,10 @@ export function Receipt({ saleId, onClose }: ReceiptProps) {
             : Number(saleData.loyalty_discount),
           loyalty_points_redeemed: null,
           loyalty_points_earned: null,
+          etims_status: saleData.etims_status || "not_applicable",
+          etims_receipt_no: saleData.etims_receipt_no || null,
+          etims_qr_code: saleData.etims_qr_code || null,
+          etims_signature: saleData.etims_signature || null,
           sale_items: saleData.items.map((item) => ({
             quantity: Number(item.quantity),
             unit_price: Number(item.unit_price),
@@ -440,6 +452,51 @@ export function Receipt({ saleId, onClose }: ReceiptProps) {
               pointsEarned={sale.loyalty_points_earned ?? 0}
             />
           )}
+
+          {/* eTIMS Fiscal Section */}
+          <div className="border-t pt-3 text-center text-xs space-y-1">
+            {sale.etims_status === "submitted" && sale.etims_receipt_no ? (
+              <div className="space-y-1">
+                <div className="font-semibold text-primary">KRA eTIMS Fiscal Receipt</div>
+                <div className="font-mono text-[11px]">Invoice No: {sale.etims_receipt_no}</div>
+                {sale.etims_signature && (
+                  <div className="font-mono text-[10px] text-muted-foreground break-all">
+                    Sig: {sale.etims_signature}
+                  </div>
+                )}
+                {sale.etims_qr_code && (
+                  <div className="py-2 flex flex-col items-center justify-center">
+                    <img
+                      src={`https://api.qrserver.com/v1/create-qr-code/?size=110x110&data=${encodeURIComponent(sale.etims_qr_code)}`}
+                      alt="eTIMS Verification QR"
+                      className="w-24 h-24 mx-auto border p-1 rounded bg-white"
+                      loading="lazy"
+                    />
+                    <a
+                      href={sale.etims_qr_code}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[10px] text-blue-600 underline mt-1 break-all"
+                    >
+                      Verify with KRA
+                    </a>
+                  </div>
+                )}
+              </div>
+            ) : sale.etims_status === "pending" ? (
+              <div className="text-amber-600 dark:text-amber-400 font-medium py-1">
+                Fiscal receipt pending - receipt will be available shortly
+              </div>
+            ) : sale.etims_status === "failed" ? (
+              <div className="text-destructive font-medium py-1">
+                Fiscal submission pending verification
+              </div>
+            ) : (
+              <div className="text-muted-foreground italic py-1">
+                Non-fiscal receipt
+              </div>
+            )}
+          </div>
 
           {/* Footer */}
           <div className="text-center text-xs border-t pt-4 space-y-1">

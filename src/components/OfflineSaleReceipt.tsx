@@ -51,6 +51,10 @@ export function OfflineSaleReceipt({ sale, onClose }: OfflineSaleReceiptProps) {
               <span>Provisional total</span>
               <span>{formatCurrency(sale.expectedTotal)}</span>
             </div>
+            <div className="rounded border border-amber-300 bg-amber-50 dark:bg-amber-950 p-2 text-center text-xs text-amber-800 dark:text-amber-200">
+              <p className="font-semibold">Fiscal receipt pending - receipt will be available shortly after sync</p>
+              <p className="text-[11px] mt-0.5">Non-fiscal provisional document (No KRA QR issued)</p>
+            </div>
             <p className="text-sm text-muted-foreground">
               Keep this reference for reconciliation. The server will recheck price, tax, stock, and cashier shift before recording the sale.
             </p>

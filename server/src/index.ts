@@ -38,6 +38,7 @@ import { WarehouseService } from "./services/WarehouseService";
 import { TaxService } from "./services/TaxService";
 import { AdminSetupService } from "./services/AdminSetupService";
 import { getOtpEmailConfigurationIssues } from "./services/EmailService";
+import { EtimsService } from "./services/etims/EtimsService";
 
 export const app = express();
 export const httpServer = createServer(app);
@@ -121,6 +122,14 @@ if (!process.env.DATABASE_URL) {
 if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
     console.error("FATAL: PORT must be configured as a valid TCP port.");
     process.exit(1);
+}
+
+if (process.env.NODE_ENV === "production") {
+    const etimsMode = (process.env.ETIMS_MODE || "").trim().toLowerCase();
+    if (etimsMode !== "off" && etimsMode !== "mock" && etimsMode !== "live") {
+        console.error("FATAL: ETIMS_MODE must be explicitly set to 'off', 'mock', or 'live' in production. Configure ETIMS_MODE before starting the server.");
+        process.exit(1);
+    }
 }
 
 export const defaultAllowedOrigins = [
@@ -498,6 +507,7 @@ export const startServer = async () => {
                     `Production email delivery is required for OTP login: ${emailConfigurationIssues.join(", ")}.`,
                 );
             }
+            EtimsService.resolveEtimsMode();
         }
 
         await AppDataSource.initialize();

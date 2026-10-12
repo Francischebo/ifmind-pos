@@ -226,4 +226,14 @@ export class SocketService {
             this.publishToOtherInstances({ event: "new_sale", payload });
         }
     }
+
+    static emitEtimsStatusUpdated(saleId: string, status: string, receiptNo?: string | null) {
+        if (this.io) {
+            this.io.emit("etims_status_updated", {
+                sale_id: saleId,
+                etims_status: status,
+                etims_receipt_no: receiptNo,
+            });
+        }
+    }
 }

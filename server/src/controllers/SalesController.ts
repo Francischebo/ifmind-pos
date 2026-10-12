@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import { AuthenticatedRequest } from "../middleware/auth";
 import { AppDataSource } from "../data-source";
-import { Sale, SaleStatus, PaymentMethod } from "../entity/Sale";
+import { Sale, SaleStatus, PaymentMethod, EtimsStatus } from "../entity/Sale";
 import { SaleItem } from "../entity/SaleItem";
 import { Product } from "../entity/Product";
 import { User } from "../entity/User";
@@ -14,7 +14,7 @@ import { CreditNote } from "../entity/CreditNote";
 import { StoreCredit, StoreCreditStatus } from "../entity/StoreCredit";
 import { AccountingService } from "../services/AccountingService";
 import { InventoryService } from "../services/InventoryService";
-import { EtimsMockService } from "../services/EtimsMockService";
+import { EtimsService } from "../services/etims/EtimsService";
 import { SocketService } from "../services/SocketService";
 import { MpesaTransaction } from "../entity/MpesaTransaction";
 import { PaymentCheckoutSession } from "../entity/PaymentCheckoutSession";
@@ -281,8 +281,16 @@ export const sanitizeParkedSalePayload = (input: unknown): SanitizedParkedSalePa
 export class SalesController {
     static async getAllSales(req: Request, res: Response) {
         try {
+            const etimsStatus = typeof req.query.etims_status === "string" ? req.query.etims_status.trim().toLowerCase() : undefined;
+            const whereClause: Record<string, unknown> = {};
+            if (etimsStatus && etimsStatus !== "all") {
+                whereClause.etims_status = etimsStatus;
+            }
             const sales = await saleRepository.find({
-                relations: ["items", "items.product", "cashier"]
+                where: Object.keys(whereClause).length > 0 ? whereClause : undefined,
+                relations: ["items", "items.product", "cashier", "customer"],
+                order: { created_at: "DESC" },
+                take: 100,
             });
             res.json(sales);
         } catch (error) {
@@ -780,11 +788,15 @@ export class SalesController {
                 }
             }
 
-            // Submit to KRA ETIMS (Mock)
-            const etimsData = await EtimsMockService.signInvoice(sale);
-            sale.etims_receipt_no = etimsData.receipt_no;
-            sale.etims_qr_code = etimsData.qr_code;
-            sale.etims_signature = etimsData.signature;
+            // Initialize eTIMS fiscal tracking fields
+            const etimsMode = EtimsService.resolveEtimsMode();
+            sale.etims_status = etimsMode === "off" ? EtimsStatus.NOT_APPLICABLE : EtimsStatus.PENDING;
+            sale.etims_attempts = 0;
+            sale.etims_last_error = null;
+            sale.etims_submitted_at = null;
+            sale.etims_receipt_no = null;
+            sale.etims_qr_code = null;
+            sale.etims_signature = null;
 
             await queryRunner.manager.save(sale);
 
@@ -871,6 +883,18 @@ export class SalesController {
             await queryRunner.manager.save(openShift);
 
             await queryRunner.commitTransaction();
+
+            let finalSale = sale;
+            if (sale.etims_status === EtimsStatus.PENDING) {
+                try {
+                    const signed = await EtimsService.processSaleSigning(sale.id);
+                    if (signed) {
+                        finalSale = signed;
+                    }
+                } catch (err) {
+                    console.error("Asynchronous eTIMS sale signing failed:", err);
+                }
+            }
             
             // Emit Socket events after success
             try {
@@ -882,7 +906,7 @@ export class SalesController {
                 console.error("Socket emit failed", err);
             }
 
-            res.status(201).json(sale);
+            res.status(201).json(finalSale);
 
         } catch (error) {
             await queryRunner.rollbackTransaction();
@@ -967,6 +991,14 @@ export class SalesController {
             creditNote.amount = sale.total_amount;
             creditNote.reason = reason || "Customer Return/Void";
             creditNote.cashier = cashier;
+            const etimsMode = EtimsService.resolveEtimsMode();
+            creditNote.etims_status = etimsMode === "off" ? EtimsStatus.NOT_APPLICABLE : EtimsStatus.PENDING;
+            creditNote.etims_attempts = 0;
+            creditNote.etims_last_error = null;
+            creditNote.etims_submitted_at = null;
+            creditNote.etims_note_no = null;
+            creditNote.etims_qr_code = null;
+            creditNote.etims_signature = null;
             await queryRunner.manager.save(creditNote);
 
             const settlement = {
@@ -1010,6 +1042,18 @@ export class SalesController {
 
             await queryRunner.commitTransaction();
 
+            let finalCreditNote = creditNote;
+            if (creditNote.etims_status === EtimsStatus.PENDING) {
+                try {
+                    const signed = await EtimsService.processCreditNoteSigning(creditNote.id);
+                    if (signed) {
+                        finalCreditNote = signed;
+                    }
+                } catch (err) {
+                    console.error("Asynchronous eTIMS void credit note signing failed:", err);
+                }
+            }
+
             try {
                 for (const update of inventoryUpdates) {
                     SocketService.emitInventoryUpdated(update.productId, update.newStockLevel, update.warehouseId || undefined);
@@ -1018,7 +1062,7 @@ export class SalesController {
                 console.error("Socket emit failed", err);
             }
 
-            res.status(200).json({ message: "Sale voided successfully", creditNote });
+            res.status(200).json({ message: "Sale voided successfully", creditNote: finalCreditNote });
 
         } catch (error) {
             await queryRunner.rollbackTransaction();

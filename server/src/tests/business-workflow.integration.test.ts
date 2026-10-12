@@ -42,6 +42,7 @@ interface IntegrationApiObject {
         etims_note_no: string;
         etims_qr_code: string;
         etims_signature: string;
+        etims_status?: string;
     };
     requested_by: { id: string };
     name: string;
@@ -177,6 +178,7 @@ let createdConcurrentCallbackSaleId = "";
 let createdDiscountedSaleId = "";
 let createdTaxRoundingSaleId = "";
 let createdEtimsFailureSaleId = "";
+let createdNoShiftSaleId = "";
 let createdPesapalSaleId = "";
 let createdWarehouseReceiptSaleId = "";
 let createdHybridAccountingReferenceId = "";
@@ -242,7 +244,7 @@ test.after(async () => {
                     await AppDataSource.getRepository(ReturnRequest).delete({ id: returnRequestId });
                 }
             }
-            for (const saleId of [createdSaleId, createdMpesaSaleId, createdPaybillSaleId, createdCallbackSaleId, createdConcurrentCallbackSaleId, createdDiscountedSaleId, createdTaxRoundingSaleId, createdEtimsFailureSaleId, createdPesapalSaleId, createdWarehouseReceiptSaleId, createdHybridAccountingReferenceId]) {
+            for (const saleId of [createdSaleId, createdMpesaSaleId, createdPaybillSaleId, createdCallbackSaleId, createdConcurrentCallbackSaleId, createdDiscountedSaleId, createdTaxRoundingSaleId, createdEtimsFailureSaleId, createdNoShiftSaleId, createdPesapalSaleId, createdWarehouseReceiptSaleId, createdHybridAccountingReferenceId]) {
                 if (saleId) {
                     await AppDataSource.query(
                         `DELETE FROM "sale_item_batches"
@@ -293,7 +295,7 @@ test.after(async () => {
                 }
                 await AppDataSource.getRepository(PurchaseOrder).delete({ id: createdPartialPurchaseOrderId });
             }
-            for (const saleId of [createdSaleId, createdMpesaSaleId, createdPaybillSaleId, createdCallbackSaleId, createdConcurrentCallbackSaleId, createdDiscountedSaleId, createdTaxRoundingSaleId, createdEtimsFailureSaleId, createdPesapalSaleId, createdWarehouseReceiptSaleId, createdHybridAccountingReferenceId]) {
+            for (const saleId of [createdSaleId, createdMpesaSaleId, createdPaybillSaleId, createdCallbackSaleId, createdConcurrentCallbackSaleId, createdDiscountedSaleId, createdTaxRoundingSaleId, createdEtimsFailureSaleId, createdNoShiftSaleId, createdPesapalSaleId, createdWarehouseReceiptSaleId, createdHybridAccountingReferenceId]) {
                 if (saleId) {
                     await AppDataSource.getRepository(Invoice).delete({ sale_id: saleId });
                     const creditNotes = await AppDataSource.getRepository(CreditNote).find({
@@ -1467,12 +1469,12 @@ test("admin can access protected product workflow and reject unauthorized reques
         const etimsFailureSale = await AppDataSource.getRepository(Sale).save(
             AppDataSource.getRepository(Sale).create({
                 cashier: etimsFailureCashier,
-                subtotal: 18,
+                subtotal: 36,
                 tax_amount: 0,
-                total_amount: 18,
+                total_amount: 36,
                 payment_method: PaymentMethod.CASH,
                 status: SaleStatus.COMPLETED,
-                cash_amount: 18,
+                cash_amount: 36,
                 mpesa_amount: 0,
                 store_credit_amount: 0,
                 change_amount: 0,
@@ -1485,10 +1487,10 @@ test("admin can access protected product workflow and reject unauthorized reques
             AppDataSource.getRepository(SaleItem).create({
                 sale: etimsFailureSale,
                 product: createdProduct,
-                quantity: 1,
+                quantity: 2,
                 unit_price: 18,
                 tax_rate: 0,
-                line_total: 18,
+                line_total: 36,
             })
         );
         const etimsFailureReturnResponse = await fetch(`http://127.0.0.1:${port}/api/returns/request`, {
@@ -1496,7 +1498,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             headers: { ...tokenHeader, "Content-Type": "application/json" },
             body: JSON.stringify({
                 sale_id: etimsFailureSale.id,
-                reason: "Verify return rollback when credit-note signing fails",
+                reason: "Verify decoupled return succeeds when eTIMS signing fails",
                 items: [{ sale_item_id: etimsFailureSaleItem.id, quantity: 1 }],
             }),
         });
@@ -1507,7 +1509,6 @@ test("admin can access protected product workflow and reject unauthorized reques
             where: { id: etimsFailureReturn.id },
             relations: ["items"],
         });
-        const stockBeforeEtimsFailure = await productRepository.findOneByOrFail({ id: createdProduct.id });
         const originalSignCreditNote = EtimsMockService.signCreditNote;
         let signingFailureResponse: Response;
         EtimsMockService.signCreditNote = async () => {
@@ -1520,7 +1521,7 @@ test("admin can access protected product workflow and reject unauthorized reques
                     method: "POST",
                     headers: { ...tokenHeader, "Content-Type": "application/json" },
                     body: JSON.stringify({
-                        refund_method: "cash",
+                        refund_method: "store_credit",
                         items_conditions: [{
                             return_item_id: returnItems.items[0].id,
                             condition: "damaged",
@@ -1531,35 +1532,22 @@ test("admin can access protected product workflow and reject unauthorized reques
         } finally {
             EtimsMockService.signCreditNote = originalSignCreditNote;
         }
-        assert.equal(signingFailureResponse.status, 400);
-        assert.match((await signingFailureResponse.json() as IntegrationApiObject).message, /credit-note signing failure/i);
-        const failedSigningReturn = await AppDataSource.getRepository(ReturnRequest).findOneByOrFail({
+        // Decoupled eTIMS signing: Return approval succeeds with HTTP 200 even when eTIMS signing fails
+        assert.equal(signingFailureResponse.status, 200);
+        const failureApprovalResult = await signingFailureResponse.json() as IntegrationApiObject;
+        assert.equal(failureApprovalResult.creditNote.etims_status, "pending");
+
+        const approvedReturn = await AppDataSource.getRepository(ReturnRequest).findOneByOrFail({
             id: etimsFailureReturn.id,
         });
-        assert.equal(failedSigningReturn.status, "pending");
-        const stockAfterEtimsFailure = await productRepository.findOneByOrFail({ id: createdProduct.id });
-        assert.equal(stockAfterEtimsFailure.stock_on_hand, stockBeforeEtimsFailure.stock_on_hand);
-        assert.equal(
-            await AppDataSource.getRepository(CreditNote).countBy({ sale: { id: etimsFailureSale.id } }),
-            0,
-        );
-        assert.equal(
-            await AppDataSource.getRepository(JournalEntry).countBy({
-                reference_id: etimsFailureSale.id,
-                reference_type: "SALE_VOID",
-            }),
-            0,
-        );
+        assert.equal(approvedReturn.status, "approved");
 
-        const rejectedEtimsReturnResponse = await fetch(
-            `http://127.0.0.1:${port}/admin/returns/reject/${etimsFailureReturn.id}`,
-            {
-                method: "POST",
-                headers: { ...tokenHeader, "Content-Type": "application/json" },
-                body: JSON.stringify({ rejection_reason: "Reset fixture for shift guard" }),
-            },
-        );
-        assert.equal(rejectedEtimsReturnResponse.status, 200);
+        const pendingCreditNote = await AppDataSource.getRepository(CreditNote).findOneOrFail({
+            where: { id: failureApprovalResult.creditNote.id },
+        });
+        assert.equal(pendingCreditNote.etims_status, "pending");
+        assert.equal(pendingCreditNote.etims_attempts, 1);
+        assert.match(pendingCreditNote.etims_last_error || "", /credit-note signing failure/i);
         const cashierToken = jwt.sign(
             {
                 id: etimsFailureCashier.id,
@@ -1570,13 +1558,40 @@ test("admin can access protected product workflow and reject unauthorized reques
             { expiresIn: "1h" },
         );
         const cashierTokenHeader = { Authorization: `Bearer ${cashierToken}` };
+        const noShiftSale = await AppDataSource.getRepository(Sale).save(
+            AppDataSource.getRepository(Sale).create({
+                cashier: etimsFailureCashier,
+                subtotal: 36,
+                tax_amount: 0,
+                total_amount: 36,
+                payment_method: PaymentMethod.CASH,
+                status: SaleStatus.COMPLETED,
+                cash_amount: 36,
+                mpesa_amount: 0,
+                store_credit_amount: 0,
+                change_amount: 0,
+                loyalty_discount: 0,
+                payment_status: "paid",
+            })
+        );
+        createdNoShiftSaleId = noShiftSale.id;
+        const noShiftSaleItem = await AppDataSource.getRepository(SaleItem).save(
+            AppDataSource.getRepository(SaleItem).create({
+                sale: noShiftSale,
+                product: createdProduct,
+                quantity: 2,
+                unit_price: 18,
+                tax_rate: 0,
+                line_total: 36,
+            })
+        );
         const noShiftCashReturnResponse = await fetch(`http://127.0.0.1:${port}/api/returns/request`, {
             method: "POST",
             headers: { ...cashierTokenHeader, "Content-Type": "application/json" },
             body: JSON.stringify({
-                sale_id: etimsFailureSale.id,
+                sale_id: noShiftSale.id,
                 reason: "Verify cash refund requires an active cashier shift",
-                items: [{ sale_item_id: etimsFailureSaleItem.id, quantity: 1 }],
+                items: [{ sale_item_id: noShiftSaleItem.id, quantity: 1 }],
             }),
         });
         assert.equal(noShiftCashReturnResponse.status, 201);
@@ -1608,7 +1623,7 @@ test("admin can access protected product workflow and reject unauthorized reques
         });
         assert.equal(unprocessedCashReturn.status, "pending");
         assert.equal(
-            await AppDataSource.getRepository(CreditNote).countBy({ sale: { id: etimsFailureSale.id } }),
+            await AppDataSource.getRepository(CreditNote).countBy({ sale: { id: noShiftSale.id } }),
             0,
         );
 
@@ -1634,10 +1649,10 @@ test("admin can access protected product workflow and reject unauthorized reques
             id: noShiftCashReturn.id,
         });
         const decisionRaceCreditNotes = await AppDataSource.getRepository(CreditNote).countBy({
-            sale: { id: etimsFailureSale.id },
+            sale: { id: noShiftSale.id },
         });
         const decisionRaceReversals = await AppDataSource.getRepository(JournalEntry).countBy({
-            reference_id: etimsFailureSale.id,
+            reference_id: noShiftSale.id,
             reference_type: "SALE_VOID",
         });
         const stockAfterDecisionRace = await productRepository.findOneByOrFail({ id: createdProduct.id });
@@ -1703,7 +1718,7 @@ test("admin can access protected product workflow and reject unauthorized reques
         const createdResponse = concurrentSaleResponses.find((response) => response.status === 201)!;
         const createdSale = (await createdResponse.json()) as IntegrationApiObject;
         createdSaleId = createdSale.id;
-        assert.equal(createdSale.total_amount, 36);
+        assert.equal(Number(createdSale.total_amount), 36);
         assert.equal(createdSale.status, "completed");
         assert.equal(Number(createdSale.cash_amount), 40);
         assert.equal(Number(createdSale.change_amount), 4);

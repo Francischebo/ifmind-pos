@@ -19,6 +19,13 @@ export enum SaleStatus {
     PARKED = "parked"
 }
 
+export enum EtimsStatus {
+    NOT_APPLICABLE = "not_applicable",
+    PENDING = "pending",
+    SUBMITTED = "submitted",
+    FAILED = "failed",
+}
+
 @Entity("sales")
 export class Sale {
     @PrimaryGeneratedColumn("uuid")
@@ -90,14 +97,26 @@ export class Sale {
     pesapal_status: string; // 'pending', 'completed', 'failed'
 
     // ETIMS Compliance fields
-    @Column({ nullable: true })
-    etims_receipt_no: string;
+    @Column({ type: "varchar", length: 32, default: "not_applicable" })
+    etims_status: EtimsStatus;
+
+    @Column("int", { default: 0 })
+    etims_attempts: number;
 
     @Column("text", { nullable: true })
-    etims_qr_code: string;
+    etims_last_error: string | null;
+
+    @Column({ type: "timestamptz", nullable: true })
+    etims_submitted_at: Date | null;
+
+    @Column({ type: "varchar", nullable: true })
+    etims_receipt_no: string | null;
 
     @Column("text", { nullable: true })
-    etims_signature: string;
+    etims_qr_code: string | null;
+
+    @Column("text", { nullable: true })
+    etims_signature: string | null;
 
     @CreateDateColumn()
     created_at: Date;

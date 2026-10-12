@@ -31,3 +31,5 @@ services:
         sync: false
       - key: RESEND_FROM_EMAIL
         sync: false
+      - key: ETIMS_MODE
+        value: "off"
