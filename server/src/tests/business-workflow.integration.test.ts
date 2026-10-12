@@ -331,6 +331,18 @@ test.after(async () => {
                          WHERE "from_warehouse_id" = $1 OR "to_warehouse_id" = $1`,
                         [createdReceivingWarehouseId],
                     );
+                    const remainingSales = await AppDataSource.getRepository(Sale).find({
+                        where: { warehouse: { id: createdReceivingWarehouseId } },
+                    });
+                    for (const remainingSale of remainingSales) {
+                        await AppDataSource.getRepository(Invoice).delete({ sale_id: remainingSale.id });
+                        await AppDataSource.query(
+                            `DELETE FROM "sale_item_batches" WHERE "sale_item_id" IN (SELECT "id" FROM "sale_items" WHERE "sale_id" = $1)`,
+                            [remainingSale.id],
+                        );
+                        await AppDataSource.getRepository(SaleItem).delete({ sale: { id: remainingSale.id } });
+                        await AppDataSource.getRepository(Sale).delete({ id: remainingSale.id });
+                    }
                     await AppDataSource.getRepository(WarehouseStock).delete({ warehouse_id: createdReceivingWarehouseId });
                     await AppDataSource.getRepository(Warehouse).delete({ id: createdReceivingWarehouseId });
                 }
@@ -1281,9 +1293,9 @@ test("admin can access protected product workflow and reject unauthorized reques
         assert.equal(discountedReturnApproval.status, 200);
         const discountedReturnResult = await discountedReturnApproval.json() as IntegrationApiObject;
         assert.equal(Number(discountedReturnResult.creditNote.amount), 15);
-        assert.match(discountedReturnResult.creditNote.etims_note_no, /^CN-KRA-/);
-        assert.match(discountedReturnResult.creditNote.etims_qr_code, /invoice=CN-KRA-/);
-        assert.match(discountedReturnResult.creditNote.etims_signature, /^CNSIG-/);
+        assert.match(discountedReturnResult.creditNote.etims_note_no, /^TEST-CN-ETIMS-/);
+        assert.match(discountedReturnResult.creditNote.etims_qr_code, /invoice=TEST-CN-ETIMS-/);
+        assert.match(discountedReturnResult.creditNote.etims_signature, /^TEST-CNSIG-/);
         const persistedSignedCreditNote = await AppDataSource.getRepository(CreditNote).findOneOrFail({
             where: { id: discountedReturnResult.creditNote.id },
             relations: ["return_request"],
@@ -3543,7 +3555,7 @@ test("user can register, verify login OTP, and access their profile", async () =
 
     try {
         const port = (server.address() as AddressInfo).port;
-        const registrationResponse = await fetch(`http://127.0.0.1:${port}/api/auth/register`, {
+        const publicRegistrationResponse = await fetch(`http://127.0.0.1:${port}/api/auth/register`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -3552,7 +3564,27 @@ test("user can register, verify login OTP, and access their profile", async () =
                 full_name: "Integration Auth User",
             }),
         });
-        assert.equal(registrationResponse.status, 201, "Valid registration should create a user");
+        assert.equal(publicRegistrationResponse.status, 403, "Public registration must be disabled (returns 403)");
+
+        const adminToken = jwt.sign(
+            { id: adminUserId, email: adminEmail, role: AppRole.ADMIN },
+            process.env.JWT_SECRET as string,
+            { expiresIn: "1h" }
+        );
+        const adminCreateResponse = await fetch(`http://127.0.0.1:${port}/api/users`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${adminToken}`,
+            },
+            body: JSON.stringify({
+                email: registeredAuthEmail,
+                password: "IntegrationPass123!",
+                full_name: "Integration Auth User",
+                role: AppRole.CASHIER,
+            }),
+        });
+        assert.equal(adminCreateResponse.status, 201, "Admin should create the user via POST /api/users");
 
         const failedDeliveryResponse = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
             method: "POST",
