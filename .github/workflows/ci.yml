@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - prod-hardening
+      - '**'
+  pull_request:
+    branches:
+      - main
+      - prod-hardening
+
+jobs:
+  test-and-build:
+    name: Test, Lint, and Build
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Frontend Dependencies
+        run: npm ci
+
+      - name: Install Backend Dependencies
+        run: |
+          cd server
+          npm ci
+
+      - name: Backend Typecheck
+        run: |
+          cd server
+          npx tsc -p tsconfig.json --noEmit
+
+      - name: Backend Unit Tests
+        run: |
+          cd server
+          npm test
+
+      - name: Backend Integration Tests
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+          JWT_SECRET: super_secret_test_jwt_key_32_characters_long!
+          ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          PORT: 3998
+        run: |
+          cd server
+          npm run test:integration
+
+      - name: Frontend Typecheck
+        run: npx tsc --noEmit -p tsconfig.app.json
+
+      - name: Frontend Lint
+        run: npx eslint .
+
+      - name: Frontend Production Build
+        env:
+          VITE_API_URL: /api
+        run: npm run build
