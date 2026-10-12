@@ -19,6 +19,17 @@ interface POEmailRequest {
   }>;
 }
 
+const escapeHtml = (str: unknown): string => {
+  if (typeof str !== "string") return "";
+  return str.replace(/[&<>'"]/g, (tag) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    "'": '&#39;',
+    '"': '&quot;',
+  }[tag] || tag));
+};
+
 const handler = async (req: Request): Promise<Response> => {
   console.log("send-po-email function called");
   
@@ -62,12 +73,16 @@ const handler = async (req: Request): Promise<Response> => {
 
     console.log(`Sending PO email to: ${vendorEmail} for PO: ${poNumber}`);
 
+    const safePoNumber = escapeHtml(poNumber);
+    const safeVendorName = escapeHtml(vendorName);
+    const cleanSubjectPoNumber = poNumber.replace(/[\r\n]+/g, "").trim();
+
     const itemsHtml = items.map(item => `
       <tr>
-        <td style="padding: 12px; border: 1px solid #e5e7eb;">${item.product_name}</td>
-        <td style="padding: 12px; border: 1px solid #e5e7eb; text-align: center;">${item.quantity}</td>
-        <td style="padding: 12px; border: 1px solid #e5e7eb; text-align: right;">KSh ${item.unit_cost.toLocaleString('en-KE', { minimumFractionDigits: 2 })}</td>
-        <td style="padding: 12px; border: 1px solid #e5e7eb; text-align: right;">KSh ${(item.quantity * item.unit_cost).toLocaleString('en-KE', { minimumFractionDigits: 2 })}</td>
+        <td style="padding: 12px; border: 1px solid #e5e7eb;">${escapeHtml(item.product_name)}</td>
+        <td style="padding: 12px; border: 1px solid #e5e7eb; text-align: center;">${Number(item.quantity) || 0}</td>
+        <td style="padding: 12px; border: 1px solid #e5e7eb; text-align: right;">KSh ${(Number(item.unit_cost) || 0).toLocaleString('en-KE', { minimumFractionDigits: 2 })}</td>
+        <td style="padding: 12px; border: 1px solid #e5e7eb; text-align: right;">KSh ${((Number(item.quantity) || 0) * (Number(item.unit_cost) || 0)).toLocaleString('en-KE', { minimumFractionDigits: 2 })}</td>
       </tr>
     `).join('');
 
@@ -81,11 +96,11 @@ const handler = async (req: Request): Promise<Response> => {
         <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; padding: 20px;">
           <div style="background-color: #f8f9fa; padding: 30px; border-radius: 10px; margin-bottom: 20px;">
             <h1 style="color: #2563eb; margin: 0 0 10px 0;">Purchase Order</h1>
-            <p style="font-size: 18px; color: #666; margin: 0;">PO Number: <strong>${poNumber}</strong></p>
+            <p style="font-size: 18px; color: #666; margin: 0;">PO Number: <strong>${safePoNumber}</strong></p>
           </div>
 
           <div style="background-color: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-            <p style="font-size: 16px; margin-bottom: 20px;">Dear ${vendorName},</p>
+            <p style="font-size: 16px; margin-bottom: 20px;">Dear ${safeVendorName},</p>
             
             <p style="font-size: 16px; margin-bottom: 20px;">
               We are sending you this purchase order for the following items. Please review and confirm receipt.
@@ -143,7 +158,7 @@ const handler = async (req: Request): Promise<Response> => {
     const emailResponse = await resend.emails.send({
       from: "POS System <onboarding@resend.dev>",
       to: [vendorEmail],
-      subject: `Purchase Order ${poNumber}`,
+      subject: `Purchase Order ${cleanSubjectPoNumber}`,
       html: emailHtml,
     });
 
@@ -172,7 +187,7 @@ const handler = async (req: Request): Promise<Response> => {
         ...corsHeaders,
       },
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error("Error in send-po-email function:", error);
     console.error("Error stack:", error.stack);
     return new Response(

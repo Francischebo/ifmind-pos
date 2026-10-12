@@ -245,6 +245,11 @@ export function Receipt({ saleId, onClose }: ReceiptProps) {
             <p>PIN: {settings.tax_pin || "P000000000A"}</p>
           </div>
 
+          {/* Prominent KRA Fiscal Compliance Disclaimer */}
+          <div className="my-2 border-2 border-dashed border-amber-500 bg-amber-50 p-2 text-center text-xs font-bold uppercase tracking-wider text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+            *** TEST RECEIPT - NOT A VALID TAX INVOICE ***
+          </div>
+
           {/* Sale Info */}
           <div className="space-y-1">
             <div className="flex justify-between">
@@ -437,7 +442,10 @@ export function Receipt({ saleId, onClose }: ReceiptProps) {
           )}
 
           {/* Footer */}
-          <div className="text-center text-xs border-t pt-4">
+          <div className="text-center text-xs border-t pt-4 space-y-1">
+            <p className="font-semibold text-amber-700 dark:text-amber-400">
+              *** TEST RECEIPT - NOT A VALID TAX INVOICE ***
+            </p>
             <p>{settings.receipt_footer || "Thank you for your business!"}</p>
             <p className="mt-2 text-muted-foreground">
               Powered by CFI-POS Techiez

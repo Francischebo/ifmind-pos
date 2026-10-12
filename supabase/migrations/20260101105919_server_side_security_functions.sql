@@ -78,9 +78,9 @@ $$;
 -- Function to validate and create sale server-side
 CREATE OR REPLACE FUNCTION public.create_secure_sale(
   p_cashier_id UUID,
-  p_customer_id UUID DEFAULT NULL,
   p_payment_method TEXT,
   p_items JSONB,
+  p_customer_id UUID DEFAULT NULL,
   p_loyalty_discount DECIMAL DEFAULT 0,
   p_idempotency_key TEXT DEFAULT NULL
 )

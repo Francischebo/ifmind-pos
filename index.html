@@ -35,7 +35,7 @@
     <!-- Favicon & Apple Touch Icons -->
     <link rel="icon" type="image/png" href="/cfi-pos-techiez-mark.png" />
     <link rel="apple-touch-icon" href="/pwa-192x192.png" />
-    <link rel="manifest" href="/manifest.json" />
+    <link rel="manifest" href="/manifest.webmanifest" />
     
     <!-- Critical CSS - Inlined for instant rendering -->
     <style>
@@ -85,19 +85,5 @@
       </div>
     </div>
     <script type="module" src="/src/main.tsx"></script>
-    <script>
-      // Remove loading shell once React hydrates
-      window.addEventListener('DOMContentLoaded', function() {
-        var loadingEl = document.getElementById('app-loading');
-        if (loadingEl) {
-          // Give React a moment to mount
-          setTimeout(function() {
-            if (loadingEl.parentNode && loadingEl.parentNode.children.length > 1) {
-              loadingEl.remove();
-            }
-          }, 100);
-        }
-      });
-    </script>
   </body>
 </html>

@@ -1,4 +1,22 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cfi_pos}
+      POSTGRES_USER: ${POSTGRES_USER:-cfi_pos_app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a strong hexadecimal POSTGRES_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+    networks:
+      - pos
+
   api:
     build:
       context: ./server
@@ -7,7 +25,9 @@ services:
     environment:
       NODE_ENV: production
       PORT: "3000"
-      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL to the application PostgreSQL database}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-cfi_pos_app}:${POSTGRES_PASSWORD:?Set a strong hexadecimal POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-cfi_pos}}
+      PG_POOL_MAX: ${PG_POOL_MAX:-10}
+      PG_CONNECTION_TIMEOUT_MS: ${PG_CONNECTION_TIMEOUT_MS:-5000}
       JWT_SECRET: ${JWT_SECRET:?Set a strong JWT_SECRET}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?Set a 64-character hexadecimal ENCRYPTION_KEY}
       TYPEORM_SYNCHRONIZE: "false"
@@ -16,8 +36,8 @@ services:
       TRUST_PROXY: "1"
       DEFAULT_ADMIN_EMAIL: ${DEFAULT_ADMIN_EMAIL:-}
       DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-}
-      RESEND_API_KEY: ${RESEND_API_KEY:-}
-      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:?Set RESEND_API_KEY to enable production OTP email delivery}
+      RESEND_FROM_EMAIL: ${RESEND_FROM_EMAIL:?Set RESEND_FROM_EMAIL to a verified Resend sender}
       MPESA_CONSUMER_KEY: ${MPESA_CONSUMER_KEY:-}
       MPESA_CONSUMER_SECRET: ${MPESA_CONSUMER_SECRET:-}
       MPESA_PASSKEY: ${MPESA_PASSKEY:-}
@@ -48,6 +68,9 @@ services:
       retries: 3
     networks:
       - pos
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   web:
     build:
@@ -55,8 +78,6 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_URL: /api
-        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:?Set the public Supabase project URL}
-        VITE_SUPABASE_PUBLISHABLE_KEY: ${VITE_SUPABASE_PUBLISHABLE_KEY:?Set the public Supabase publishable key}
     restart: unless-stopped
     depends_on:
       api:
@@ -75,3 +96,6 @@ services:
 networks:
   pos:
     driver: bridge
+
+volumes:
+  postgres-data:

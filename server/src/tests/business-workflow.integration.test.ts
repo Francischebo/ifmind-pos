@@ -1,11 +1,90 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { createServer as createHttpServer } from "node:http";
 import jwt from "jsonwebtoken";
 import { createHmac, randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
+import { createRequire } from "node:module";
 
-const dotenv = require("dotenv");
+interface IntegrationApiObject {
+    id: string;
+    status: string;
+    message: string;
+    error: string;
+    sku: string;
+    sale: IntegrationApiObject;
+    request: IntegrationApiObject;
+    invoice: IntegrationApiObject;
+    shift: IntegrationApiObject;
+    items: IntegrationApiObject[];
+    results: IntegrationApiObject[];
+    movements: IntegrationApiObject[];
+    purchaseOrders: IntegrationApiObject[];
+    invoices: IntegrationApiObject[];
+    storeCreditBarcode: string;
+    mpesaRefundPending: boolean;
+    quantity: number;
+    quantity_before: number;
+    quantity_after: number;
+    total_amount: number;
+    balance_due: number;
+    amount: number;
+    ResultCode: number;
+    predictions: {
+        salesForecast: { historyDays: number; next7Days: number };
+        inventoryAlerts: unknown[];
+        recommendations: unknown[];
+    };
+    creditNote: {
+        id: string;
+        amount: number;
+        etims_note_no: string;
+        etims_qr_code: string;
+        etims_signature: string;
+    };
+    requested_by: { id: string };
+    name: string;
+    product: { name: string };
+    store_credit_voucher: { barcode: string; current_balance: number };
+    po: { status: string };
+    invoice_number: string;
+    payment: { id: string };
+    errors: string[];
+    user: { email: string; role: string };
+    profile: { full_name: string };
+    stock_on_hand: number;
+    success: boolean;
+    source: string;
+    subtotal: number;
+    unit_cost: number;
+    tax_amount: number;
+    cash_amount: number;
+    change_amount: number;
+    payment_method: string;
+    payment_status: string;
+    sale_id: string;
+    customer: { name: string };
+    cogs_total: number;
+    sale_item: { product: { name: string } };
+    checkout_request_id: string;
+    mpesa_amount: number;
+    paybill_c2b_enabled: boolean;
+    transaction_id: string;
+    account_reference: string;
+    expected_cash: number;
+    mpesa_total: number;
+    received_quantity: number;
+    created: number;
+    skipped: number;
+    phone: string;
+    otp_token: string;
+    requires_otp: boolean;
+    token: string;
+}
+
+const loadModule = createRequire(__filename);
+const dotenv = loadModule("dotenv");
 dotenv.config();
 
 const testDatabaseUrl = process.env.TEST_DATABASE_URL;
@@ -24,55 +103,58 @@ if (!process.env.JWT_SECRET) {
 process.env.DATABASE_URL = testDatabaseUrl;
 process.env.TYPEORM_SYNCHRONIZE = "true";
 
-const { app } = require("../index") as typeof import("../index");
-const { AppDataSource } = require("../data-source") as typeof import("../data-source");
-const { User, AppRole } = require("../entity/User") as typeof import("../entity/User");
-const { OtpCode } = require("../entity/OtpCode") as typeof import("../entity/OtpCode");
-const { MpesaTransaction } = require("../entity/MpesaTransaction") as typeof import("../entity/MpesaTransaction");
-const { Setting } = require("../entity/Setting") as typeof import("../entity/Setting");
-const { hashMpesaCallbackToken } = require("../controllers/PaymentController") as typeof import("../controllers/PaymentController");
-const { Product } = require("../entity/Product") as typeof import("../entity/Product");
-const { Category } = require("../entity/Category") as typeof import("../entity/Category");
-const { TaxClass } = require("../entity/TaxClass") as typeof import("../entity/TaxClass");
-const { Customer } = require("../entity/Customer") as typeof import("../entity/Customer");
-const { StoreCredit, StoreCreditStatus } = require("../entity/StoreCredit") as typeof import("../entity/StoreCredit");
-const { Vendor } = require("../entity/Vendor") as typeof import("../entity/Vendor");
-const { Warehouse } = require("../entity/Warehouse") as typeof import("../entity/Warehouse");
-const { WarehouseStock } = require("../entity/WarehouseStock") as typeof import("../entity/WarehouseStock");
-const { StockMovement } = require("../entity/StockMovement") as typeof import("../entity/StockMovement");
-const { StockTake } = require("../entity/StockTake") as typeof import("../entity/StockTake");
-const { InventoryAdjustment } = require("../entity/InventoryAdjustment") as typeof import("../entity/InventoryAdjustment");
-const { Sale, PaymentMethod, SaleStatus } = require("../entity/Sale") as typeof import("../entity/Sale");
-const { SaleItem } = require("../entity/SaleItem") as typeof import("../entity/SaleItem");
-const { Invoice } = require("../entity/Invoice") as typeof import("../entity/Invoice");
-const { Shift, ShiftStatus } = require("../entity/Shift") as typeof import("../entity/Shift");
-const { PurchaseOrder } = require("../entity/PurchaseOrder") as typeof import("../entity/PurchaseOrder");
-const { DeliveryNote } = require("../entity/DeliveryNote") as typeof import("../entity/DeliveryNote");
-const { SupplierInvoice, InvoiceStatus } = require("../entity/SupplierInvoice") as typeof import("../entity/SupplierInvoice");
-const { SupplierPayment } = require("../entity/SupplierPayment") as typeof import("../entity/SupplierPayment");
-const { ProductBatch } = require("../entity/ProductBatch") as typeof import("../entity/ProductBatch");
-const { ReturnRequest, MpesaRefundStatus } = require("../entity/ReturnRequest") as typeof import("../entity/ReturnRequest");
-const { CreditNote } = require("../entity/CreditNote") as typeof import("../entity/CreditNote");
-const { JournalEntry } = require("../entity/JournalEntry") as typeof import("../entity/JournalEntry");
-const { JournalLine } = require("../entity/JournalLine") as typeof import("../entity/JournalLine");
-const { AccountingService } = require("../services/AccountingService") as typeof import("../services/AccountingService");
-const { EtimsMockService } = require("../services/EtimsMockService") as typeof import("../services/EtimsMockService");
-const { EnforceSingleMainWarehouse1790920000000 } = require("../migration/1790920000000-EnforceSingleMainWarehouse") as typeof import("../migration/1790920000000-EnforceSingleMainWarehouse");
-const { AddPurchaseOrderReceivingWarehouse1790928000000 } = require("../migration/1790928000000-AddPurchaseOrderReceivingWarehouse") as typeof import("../migration/1790928000000-AddPurchaseOrderReceivingWarehouse");
-const { EnforceUniqueSupplierInvoiceNumber1790930000000 } = require("../migration/1790930000000-EnforceUniqueSupplierInvoiceNumber") as typeof import("../migration/1790930000000-EnforceUniqueSupplierInvoiceNumber");
-const { CreateStockMovementLedger1790936000000 } = require("../migration/1790936000000-CreateStockMovementLedger") as typeof import("../migration/1790936000000-CreateStockMovementLedger");
-const { AddMpesaCheckoutSessions1791000000000 } = require("../migration/1791000000000-AddMpesaCheckoutSessions") as typeof import("../migration/1791000000000-AddMpesaCheckoutSessions");
-const { CreatePaymentCheckoutSessions1791010000000 } = require("../migration/1791010000000-CreatePaymentCheckoutSessions") as typeof import("../migration/1791010000000-CreatePaymentCheckoutSessions");
-const { AddMpesaPaybillReferences1791020000000 } = require("../migration/1791020000000-AddMpesaPaybillReferences") as typeof import("../migration/1791020000000-AddMpesaPaybillReferences");
-const { AddSaleStoreCreditBarcode1791030000000 } = require("../migration/1791030000000-AddSaleStoreCreditBarcode") as typeof import("../migration/1791030000000-AddSaleStoreCreditBarcode");
-const { AddMpesaRefundSettlement1791030000001 } = require("../migration/1791030000001-AddMpesaRefundSettlement") as typeof import("../migration/1791030000001-AddMpesaRefundSettlement");
-const { AddCreditNoteEtimsFields1791040000000 } = require("../migration/1791040000000-AddCreditNoteEtimsFields") as typeof import("../migration/1791040000000-AddCreditNoteEtimsFields");
-const { LinkCreditNotesToReturns1791040000001 } = require("../migration/1791040000001-LinkCreditNotesToReturns") as typeof import("../migration/1791040000001-LinkCreditNotesToReturns");
-const { EnforceOneOpenShiftPerCashier1791050000000 } = require("../migration/1791050000000-EnforceOneOpenShiftPerCashier") as typeof import("../migration/1791050000000-EnforceOneOpenShiftPerCashier");
-const { AddSaleItemUnitCostSnapshot1791060000000 } = require("../migration/1791060000000-AddSaleItemUnitCostSnapshot") as typeof import("../migration/1791060000000-AddSaleItemUnitCostSnapshot");
-const { AllowParkedSales1791070000000 } = require("../migration/1791070000000-AllowParkedSales") as typeof import("../migration/1791070000000-AllowParkedSales");
-const { CreateCustomerInvoices1791080000000 } = require("../migration/1791080000000-CreateCustomerInvoices") as typeof import("../migration/1791080000000-CreateCustomerInvoices");
-const { EmailService } = require("../services/EmailService") as typeof import("../services/EmailService");
+const { app } = loadModule("../index") as typeof import("../index");
+const { AppDataSource } = loadModule("../data-source") as typeof import("../data-source");
+const { User, AppRole } = loadModule("../entity/User") as typeof import("../entity/User");
+const { OtpCode } = loadModule("../entity/OtpCode") as typeof import("../entity/OtpCode");
+const { MpesaTransaction } = loadModule("../entity/MpesaTransaction") as typeof import("../entity/MpesaTransaction");
+const { Setting } = loadModule("../entity/Setting") as typeof import("../entity/Setting");
+const { hashMpesaCallbackToken } = loadModule("../controllers/PaymentController") as typeof import("../controllers/PaymentController");
+const { Product } = loadModule("../entity/Product") as typeof import("../entity/Product");
+const { Category } = loadModule("../entity/Category") as typeof import("../entity/Category");
+const { TaxClass } = loadModule("../entity/TaxClass") as typeof import("../entity/TaxClass");
+const { Customer } = loadModule("../entity/Customer") as typeof import("../entity/Customer");
+const { StoreCredit, StoreCreditStatus } = loadModule("../entity/StoreCredit") as typeof import("../entity/StoreCredit");
+const { Vendor } = loadModule("../entity/Vendor") as typeof import("../entity/Vendor");
+const { Warehouse } = loadModule("../entity/Warehouse") as typeof import("../entity/Warehouse");
+const { WarehouseStock } = loadModule("../entity/WarehouseStock") as typeof import("../entity/WarehouseStock");
+const { StockMovement } = loadModule("../entity/StockMovement") as typeof import("../entity/StockMovement");
+const { StockTake } = loadModule("../entity/StockTake") as typeof import("../entity/StockTake");
+const { InventoryAdjustment } = loadModule("../entity/InventoryAdjustment") as typeof import("../entity/InventoryAdjustment");
+const { Sale, PaymentMethod, SaleStatus } = loadModule("../entity/Sale") as typeof import("../entity/Sale");
+const { SaleItem } = loadModule("../entity/SaleItem") as typeof import("../entity/SaleItem");
+const { Invoice } = loadModule("../entity/Invoice") as typeof import("../entity/Invoice");
+const { Shift, ShiftStatus } = loadModule("../entity/Shift") as typeof import("../entity/Shift");
+const { PurchaseOrder } = loadModule("../entity/PurchaseOrder") as typeof import("../entity/PurchaseOrder");
+const { DeliveryNote } = loadModule("../entity/DeliveryNote") as typeof import("../entity/DeliveryNote");
+const { SupplierInvoice, InvoiceStatus } = loadModule("../entity/SupplierInvoice") as typeof import("../entity/SupplierInvoice");
+const { SupplierPayment } = loadModule("../entity/SupplierPayment") as typeof import("../entity/SupplierPayment");
+const { ProductBatch } = loadModule("../entity/ProductBatch") as typeof import("../entity/ProductBatch");
+const { ReturnRequest, MpesaRefundStatus } = loadModule("../entity/ReturnRequest") as typeof import("../entity/ReturnRequest");
+const { CreditNote } = loadModule("../entity/CreditNote") as typeof import("../entity/CreditNote");
+const { JournalEntry } = loadModule("../entity/JournalEntry") as typeof import("../entity/JournalEntry");
+const { JournalLine } = loadModule("../entity/JournalLine") as typeof import("../entity/JournalLine");
+const { AccountingService } = loadModule("../services/AccountingService") as typeof import("../services/AccountingService");
+const { SocketService } = loadModule("../services/SocketService") as typeof import("../services/SocketService");
+const { io: createSocketClient } = loadModule("socket.io-client") as typeof import("socket.io-client");
+const { Client: PgClient } = loadModule("pg") as typeof import("pg");
+const { EtimsMockService } = loadModule("../services/EtimsMockService") as typeof import("../services/EtimsMockService");
+const { EnforceSingleMainWarehouse1790920000000 } = loadModule("../migration/1790920000000-EnforceSingleMainWarehouse") as typeof import("../migration/1790920000000-EnforceSingleMainWarehouse");
+const { AddPurchaseOrderReceivingWarehouse1790928000000 } = loadModule("../migration/1790928000000-AddPurchaseOrderReceivingWarehouse") as typeof import("../migration/1790928000000-AddPurchaseOrderReceivingWarehouse");
+const { EnforceUniqueSupplierInvoiceNumber1790930000000 } = loadModule("../migration/1790930000000-EnforceUniqueSupplierInvoiceNumber") as typeof import("../migration/1790930000000-EnforceUniqueSupplierInvoiceNumber");
+const { CreateStockMovementLedger1790936000000 } = loadModule("../migration/1790936000000-CreateStockMovementLedger") as typeof import("../migration/1790936000000-CreateStockMovementLedger");
+const { AddMpesaCheckoutSessions1791000000000 } = loadModule("../migration/1791000000000-AddMpesaCheckoutSessions") as typeof import("../migration/1791000000000-AddMpesaCheckoutSessions");
+const { CreatePaymentCheckoutSessions1791010000000 } = loadModule("../migration/1791010000000-CreatePaymentCheckoutSessions") as typeof import("../migration/1791010000000-CreatePaymentCheckoutSessions");
+const { AddMpesaPaybillReferences1791020000000 } = loadModule("../migration/1791020000000-AddMpesaPaybillReferences") as typeof import("../migration/1791020000000-AddMpesaPaybillReferences");
+const { AddSaleStoreCreditBarcode1791030000000 } = loadModule("../migration/1791030000000-AddSaleStoreCreditBarcode") as typeof import("../migration/1791030000000-AddSaleStoreCreditBarcode");
+const { AddMpesaRefundSettlement1791030000001 } = loadModule("../migration/1791030000001-AddMpesaRefundSettlement") as typeof import("../migration/1791030000001-AddMpesaRefundSettlement");
+const { AddCreditNoteEtimsFields1791040000000 } = loadModule("../migration/1791040000000-AddCreditNoteEtimsFields") as typeof import("../migration/1791040000000-AddCreditNoteEtimsFields");
+const { LinkCreditNotesToReturns1791040000001 } = loadModule("../migration/1791040000001-LinkCreditNotesToReturns") as typeof import("../migration/1791040000001-LinkCreditNotesToReturns");
+const { EnforceOneOpenShiftPerCashier1791050000000 } = loadModule("../migration/1791050000000-EnforceOneOpenShiftPerCashier") as typeof import("../migration/1791050000000-EnforceOneOpenShiftPerCashier");
+const { AddSaleItemUnitCostSnapshot1791060000000 } = loadModule("../migration/1791060000000-AddSaleItemUnitCostSnapshot") as typeof import("../migration/1791060000000-AddSaleItemUnitCostSnapshot");
+const { AllowParkedSales1791070000000 } = loadModule("../migration/1791070000000-AllowParkedSales") as typeof import("../migration/1791070000000-AllowParkedSales");
+const { CreateCustomerInvoices1791080000000 } = loadModule("../migration/1791080000000-CreateCustomerInvoices") as typeof import("../migration/1791080000000-CreateCustomerInvoices");
+const { EmailService } = loadModule("../services/EmailService") as typeof import("../services/EmailService");
 const originalSendOtpEmail = EmailService.sendOtpEmail;
 
 const adminEmail = `integration-admin-${Date.now()}@example.com`;
@@ -297,6 +379,119 @@ test.after(async () => {
     }
 });
 
+test("PostgreSQL advisory locking permits only one scheduled task runner", async () => {
+    const firstRunner = AppDataSource.createQueryRunner();
+    const secondRunner = AppDataSource.createQueryRunner();
+    await firstRunner.connect();
+    await secondRunner.connect();
+
+    try {
+        const firstLock = await firstRunner.query(
+            "SELECT pg_try_advisory_lock($1) AS acquired",
+            [71943001],
+        ) as Array<{ acquired: boolean }>;
+        const secondLock = await secondRunner.query(
+            "SELECT pg_try_advisory_lock($1) AS acquired",
+            [71943001],
+        ) as Array<{ acquired: boolean }>;
+        assert.equal(firstLock[0]?.acquired, true);
+        assert.equal(secondLock[0]?.acquired, false);
+
+        await firstRunner.query("SELECT pg_advisory_unlock($1)", [71943001]);
+        const retriedLock = await secondRunner.query(
+            "SELECT pg_try_advisory_lock($1) AS acquired",
+            [71943001],
+        ) as Array<{ acquired: boolean }>;
+        assert.equal(retriedLock[0]?.acquired, true);
+        await secondRunner.query("SELECT pg_advisory_unlock($1)", [71943001]);
+    } finally {
+        await firstRunner.release();
+        await secondRunner.release();
+    }
+});
+
+test("Socket.IO broadcasts events received from and published to other PostgreSQL-connected instances", async () => {
+    const server = createHttpServer();
+    const peerDatabaseClient = new PgClient({
+        connectionString: testDatabaseUrl,
+        application_name: "cfi-pos-socket-integration-test",
+    });
+    let socket: ReturnType<typeof createSocketClient> | undefined;
+    await SocketService.init(server);
+    server.listen(0);
+    await once(server, "listening");
+
+    try {
+        const port = (server.address() as AddressInfo).port;
+        await peerDatabaseClient.connect();
+        await peerDatabaseClient.query("LISTEN cfi_pos_socket_events");
+
+        const token = jwt.sign(
+            { id: adminUserId, email: adminEmail, role: AppRole.ADMIN },
+            process.env.JWT_SECRET as string,
+            { expiresIn: "1h" },
+        );
+        socket = createSocketClient(`http://127.0.0.1:${port}`, {
+            autoConnect: false,
+            auth: { token },
+            transports: ["websocket"],
+        });
+        const connected = new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error("Socket.IO connection timed out.")), 5000);
+            socket?.once("connect", () => {
+                clearTimeout(timeout);
+                resolve();
+            });
+            socket?.once("connect_error", (error) => {
+                clearTimeout(timeout);
+                reject(error);
+            });
+        });
+        socket.connect();
+        await connected;
+
+        const incomingEvent = new Promise<{ sale_id: string }>((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error("Cross-instance Socket.IO event timed out.")), 5000);
+            socket?.once("new_sale", (payload: { sale_id: string }) => {
+                clearTimeout(timeout);
+                resolve(payload);
+            });
+        });
+        await peerDatabaseClient.query(
+            "SELECT pg_notify($1, $2)",
+            [
+                "cfi_pos_socket_events",
+                JSON.stringify({
+                    instanceId: "another-api-instance",
+                    event: "new_sale",
+                    payload: { sale_id: "sale-published-by-peer" },
+                }),
+            ],
+        );
+        const receivedPeerEvent = await incomingEvent;
+        assert.deepEqual(receivedPeerEvent, { sale_id: "sale-published-by-peer" });
+
+        const publishedNotification = once(peerDatabaseClient, "notification", {
+            signal: AbortSignal.timeout(5000),
+        });
+        SocketService.emitNewSale("sale-published-by-this-instance");
+        const [notification] = await publishedNotification;
+        assert.equal(notification.channel, "cfi_pos_socket_events");
+        const publishedEvent = JSON.parse(notification.payload || "{}") as {
+            instanceId: string;
+            event: string;
+            payload: { sale_id: string };
+        };
+        assert.equal(typeof publishedEvent.instanceId, "string");
+        assert.equal(publishedEvent.event, "new_sale");
+        assert.deepEqual(publishedEvent.payload, { sale_id: "sale-published-by-this-instance" });
+    } finally {
+        socket?.disconnect();
+        await peerDatabaseClient.end().catch(() => undefined);
+        await SocketService.close();
+    }
+});
+
 test("admin can access protected product workflow and reject unauthorized requests", async () => {
     const server = app.listen(0);
     await once(server, "listening");
@@ -400,7 +595,7 @@ test("admin can access protected product workflow and reject unauthorized reques
         });
 
         assert.equal(createResponse.status, 201, "Product creation should return HTTP 201");
-        const createdProduct = (await createResponse.json()) as any;
+        const createdProduct = (await createResponse.json()) as IntegrationApiObject;
         assert.equal(createdProduct.sku, sku);
         const openingStockMovement = await AppDataSource.getRepository(StockMovement).findOneByOrFail({
             product_id: createdProduct.id,
@@ -426,7 +621,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             headers: tokenHeader,
         });
         assert.equal(productListResponse.status, 200);
-        const listedProducts = await productListResponse.json() as any[];
+        const listedProducts = await productListResponse.json() as IntegrationApiObject[];
         assert.equal(
             Number(listedProducts.find((product) => product.id === createdProduct.id)?.stock_on_hand),
             12,
@@ -436,7 +631,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             headers: tokenHeader,
         });
         assert.equal(productDetailsResponse.status, 200);
-        const productDetails = await productDetailsResponse.json() as any;
+        const productDetails = await productDetailsResponse.json() as IntegrationApiObject;
         assert.equal(
             Number(productDetails.stock_on_hand),
             12,
@@ -446,7 +641,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             headers: tokenHeader,
         });
         assert.equal(stockAlertsResponse.status, 200);
-        const stockAlerts = await stockAlertsResponse.json() as any[];
+        const stockAlerts = await stockAlertsResponse.json() as IntegrationApiObject[];
         assert.equal(
             Number(stockAlerts.find((product) => product.id === createdProduct.id)?.stock_on_hand),
             12,
@@ -461,7 +656,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             headers: tokenHeader,
         });
         assert.equal(predictionResponse.status, 200, "The report should generate data-backed estimates");
-        const predictionResult = await predictionResponse.json() as any;
+        const predictionResult = await predictionResponse.json() as IntegrationApiObject;
         assert.equal(predictionResult.success, true);
         assert.equal(predictionResult.source, "statistical");
         assert.equal(predictionResult.predictions.salesForecast.historyDays, 90);
@@ -511,7 +706,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             }),
         });
         assert.equal(qcProductResponse.status, 201, "QC product creation should succeed");
-        const qcProduct = (await qcProductResponse.json()) as any;
+        const qcProduct = (await qcProductResponse.json()) as IntegrationApiObject;
         await AppDataSource.getRepository(ProductBatch).save(AppDataSource.getRepository(ProductBatch).create({
             product_id: qcProduct.id,
             batch_number: `QC-${Date.now()}`,
@@ -574,7 +769,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             "Concurrent shift opens must create exactly one active till",
         );
         const openShiftResponse = openShiftResponses.find((response) => response.status === 201)!;
-        const openedShift = (await openShiftResponse.json()) as any;
+        const openedShift = (await openShiftResponse.json()) as IntegrationApiObject;
         assert.equal(
             await AppDataSource.getRepository(Shift).countBy({ cashier_id: adminUserId, status: ShiftStatus.OPEN }),
             1,
@@ -635,7 +830,7 @@ test("admin can access protected product workflow and reject unauthorized reques
                 }),
             });
             assert.equal(expiredCreditSaleResponse.status, 400, "Expired barcode credit must not be accepted for a sale");
-            assert.match((await expiredCreditSaleResponse.json() as any).message, /store credit barcode/i);
+            assert.match((await expiredCreditSaleResponse.json() as IntegrationApiObject).message, /store credit barcode/i);
             assert.equal(
                 Number((await AppDataSource.getRepository(StoreCredit).findOneByOrFail({ id: expiredStoreCredit.id })).current_balance),
                 18,
@@ -1028,7 +1223,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             }),
         });
         assert.equal(discountedSaleResponse.status, 201, "Discounted sale should be created");
-        const discountedSale = (await discountedSaleResponse.json()) as any;
+        const discountedSale = (await discountedSaleResponse.json()) as IntegrationApiObject;
         createdDiscountedSaleId = discountedSale.id;
         assert.equal(Number(discountedSale.subtotal), 36);
         assert.equal(Number(discountedSale.total_amount), 30);
@@ -1051,7 +1246,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             `http://127.0.0.1:${port}/api/sales/${discountedSale.id}`,
             { headers: tokenHeader },
         );
-        const discountedSaleDetails = (await discountedSaleDetailsResponse.json() as any).sale;
+        const discountedSaleDetails = (await discountedSaleDetailsResponse.json() as IntegrationApiObject).sale;
         assert.equal(Number(discountedSaleDetails.items[0].unit_cost), 10);
         const discountedReturnResponse = await fetch(`http://127.0.0.1:${port}/api/returns/request`, {
             method: "POST",
@@ -1063,7 +1258,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             }),
         });
         assert.equal(discountedReturnResponse.status, 201);
-        const discountedReturn = (await discountedReturnResponse.json() as any).request;
+        const discountedReturn = (await discountedReturnResponse.json() as IntegrationApiObject).request;
         createdDiscountedReturnRequestId = discountedReturn.id;
         const costChangedProduct = await AppDataSource.getRepository(Product).findOneByOrFail({ id: createdProduct.id });
         const originalDiscountedProductCost = costChangedProduct.unit_cost;
@@ -1084,7 +1279,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             await AppDataSource.getRepository(Product).save(costChangedProduct);
         }
         assert.equal(discountedReturnApproval.status, 200);
-        const discountedReturnResult = await discountedReturnApproval.json() as any;
+        const discountedReturnResult = await discountedReturnApproval.json() as IntegrationApiObject;
         assert.equal(Number(discountedReturnResult.creditNote.amount), 15);
         assert.match(discountedReturnResult.creditNote.etims_note_no, /^CN-KRA-/);
         assert.match(discountedReturnResult.creditNote.etims_qr_code, /invoice=CN-KRA-/);
@@ -1107,7 +1302,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             }),
         });
         assert.equal(secondDiscountedReturnResponse.status, 201);
-        const secondDiscountedReturn = (await secondDiscountedReturnResponse.json() as any).request;
+        const secondDiscountedReturn = (await secondDiscountedReturnResponse.json() as IntegrationApiObject).request;
         createdSecondDiscountedReturnRequestId = secondDiscountedReturn.id;
         const secondDiscountedReturnApproval = await fetch(
             `http://127.0.0.1:${port}/admin/returns/approve/${secondDiscountedReturn.id}`,
@@ -1118,7 +1313,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             },
         );
         assert.equal(secondDiscountedReturnApproval.status, 200);
-        const secondDiscountedReturnResult = await secondDiscountedReturnApproval.json() as any;
+        const secondDiscountedReturnResult = await secondDiscountedReturnApproval.json() as IntegrationApiObject;
         assert.equal(Number(secondDiscountedReturnResult.creditNote.amount), 15);
         const discountedReversals = await AppDataSource.getRepository(JournalEntry).findBy({
             reference_id: discountedSale.id,
@@ -1181,7 +1376,7 @@ test("admin can access protected product workflow and reject unauthorized reques
                 }),
             });
             assert.equal(taxRoundingSaleResponse.status, 201);
-            const taxRoundingSale = (await taxRoundingSaleResponse.json()) as any;
+            const taxRoundingSale = (await taxRoundingSaleResponse.json()) as IntegrationApiObject;
             createdTaxRoundingSaleId = taxRoundingSale.id;
             assert.equal(Number(taxRoundingSale.total_amount), 0.11);
             assert.equal(Number(taxRoundingSale.tax_amount), 0.01);
@@ -1190,7 +1385,7 @@ test("admin can access protected product workflow and reject unauthorized reques
                 `http://127.0.0.1:${port}/api/sales/${taxRoundingSale.id}`,
                 { headers: tokenHeader },
             );
-            const taxRoundingSaleDetails = (await taxRoundingSaleDetailsResponse.json() as any).sale;
+            const taxRoundingSaleDetails = (await taxRoundingSaleDetailsResponse.json() as IntegrationApiObject).sale;
             const taxRoundingCreditNotes: number[] = [];
             for (let index = 0; index < 2; index += 1) {
                 const returnResponse = await fetch(`http://127.0.0.1:${port}/api/returns/request`, {
@@ -1203,7 +1398,7 @@ test("admin can access protected product workflow and reject unauthorized reques
                     }),
                 });
                 assert.equal(returnResponse.status, 201);
-                const returnRequest = (await returnResponse.json() as any).request;
+                const returnRequest = (await returnResponse.json() as IntegrationApiObject).request;
                 if (index === 0) createdFirstTaxRoundingReturnId = returnRequest.id;
                 else createdSecondTaxRoundingReturnId = returnRequest.id;
                 const approvalResponse = await fetch(
@@ -1215,7 +1410,7 @@ test("admin can access protected product workflow and reject unauthorized reques
                     },
                 );
                 assert.equal(approvalResponse.status, 200);
-                const approvalResult = await approvalResponse.json() as any;
+                const approvalResult = await approvalResponse.json() as IntegrationApiObject;
                 taxRoundingCreditNotes.push(Number(approvalResult.creditNote.amount));
             }
             assert.deepEqual(taxRoundingCreditNotes, [0.06, 0.05]);
@@ -1294,7 +1489,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             }),
         });
         assert.equal(etimsFailureReturnResponse.status, 201);
-        const etimsFailureReturn = (await etimsFailureReturnResponse.json() as any).request;
+        const etimsFailureReturn = (await etimsFailureReturnResponse.json() as IntegrationApiObject).request;
         createdEtimsFailureReturnId = etimsFailureReturn.id;
         const returnItems = await AppDataSource.getRepository(ReturnRequest).findOneOrFail({
             where: { id: etimsFailureReturn.id },
@@ -1325,7 +1520,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             EtimsMockService.signCreditNote = originalSignCreditNote;
         }
         assert.equal(signingFailureResponse.status, 400);
-        assert.match((await signingFailureResponse.json() as any).message, /credit-note signing failure/i);
+        assert.match((await signingFailureResponse.json() as IntegrationApiObject).message, /credit-note signing failure/i);
         const failedSigningReturn = await AppDataSource.getRepository(ReturnRequest).findOneByOrFail({
             id: etimsFailureReturn.id,
         });
@@ -1373,13 +1568,13 @@ test("admin can access protected product workflow and reject unauthorized reques
             }),
         });
         assert.equal(noShiftCashReturnResponse.status, 201);
-        const noShiftCashReturn = (await noShiftCashReturnResponse.json() as any).request;
+        const noShiftCashReturn = (await noShiftCashReturnResponse.json() as IntegrationApiObject).request;
         createdNoShiftCashReturnId = noShiftCashReturn.id;
         const cashierReturnsResponse = await fetch(`http://127.0.0.1:${port}/api/returns`, {
             headers: cashierTokenHeader,
         });
         assert.equal(cashierReturnsResponse.status, 200, "Cashiers should be able to view their own return requests");
-        const cashierReturns = await cashierReturnsResponse.json() as any[];
+        const cashierReturns = await cashierReturnsResponse.json() as IntegrationApiObject[];
         assert.ok(cashierReturns.length > 0);
         assert.ok(cashierReturns.every((request) => request.requested_by.id === etimsFailureCashier.id));
         assert.ok(cashierReturns.some((request) => request.id === noShiftCashReturn.id));
@@ -1393,7 +1588,7 @@ test("admin can access protected product workflow and reject unauthorized reques
         );
         assert.equal(noShiftCashApprovalResponse.status, 400);
         assert.match(
-            (await noShiftCashApprovalResponse.json() as any).message,
+            (await noShiftCashApprovalResponse.json() as IntegrationApiObject).message,
             /open a shift for the requesting cashier/i,
         );
         const unprocessedCashReturn = await AppDataSource.getRepository(ReturnRequest).findOneByOrFail({
@@ -1494,7 +1689,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             "Concurrent retries with one key should create exactly one sale",
         );
         const createdResponse = concurrentSaleResponses.find((response) => response.status === 201)!;
-        const createdSale = (await createdResponse.json()) as any;
+        const createdSale = (await createdResponse.json()) as IntegrationApiObject;
         createdSaleId = createdSale.id;
         assert.equal(createdSale.total_amount, 36);
         assert.equal(createdSale.status, "completed");
@@ -1512,7 +1707,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             headers: tokenHeader,
         });
         assert.equal(invoicesResponse.status, 200);
-        const listedInvoices = await invoicesResponse.json() as any[];
+        const listedInvoices = await invoicesResponse.json() as IntegrationApiObject[];
         const listedInvoice = listedInvoices.find((entry) => entry.sale_id === createdSale.id);
         assert.ok(listedInvoice, "Completed sales must be retrievable from the invoice list");
         assert.equal(Number(listedInvoice.total_amount), 36);
@@ -1522,7 +1717,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             { headers: tokenHeader },
         );
         assert.equal(returnInvoiceSearch.status, 200);
-        const returnableSales = await returnInvoiceSearch.json() as any[];
+        const returnableSales = await returnInvoiceSearch.json() as IntegrationApiObject[];
         assert.equal(returnableSales.length, 1);
         assert.equal(returnableSales[0].id, createdSale.id);
         assert.equal(returnableSales[0].invoice_number, invoice.invoice_number);
@@ -1554,7 +1749,7 @@ test("admin can access protected product workflow and reject unauthorized reques
         });
         assert.equal(mismatchedIdempotencyResponse.status, 409, "A key reused for a different cart must be rejected");
         assert.match(
-            (await mismatchedIdempotencyResponse.json() as any).message,
+            (await mismatchedIdempotencyResponse.json() as IntegrationApiObject).message,
             /already used for a different sale/i,
         );
         const otherCashierDuplicateResponse = await fetch(`http://127.0.0.1:${port}/api/sales`, {
@@ -1563,16 +1758,16 @@ test("admin can access protected product workflow and reject unauthorized reques
             body: JSON.stringify(salePayload),
         });
         assert.equal(otherCashierDuplicateResponse.status, 400, "Another cashier must not receive a sale from a reused idempotency key");
-        assert.match((await otherCashierDuplicateResponse.json() as any).message, /open a shift/i);
+        assert.match((await otherCashierDuplicateResponse.json() as IntegrationApiObject).message, /open a shift/i);
 
         const listResponse = await fetch(`http://127.0.0.1:${port}/api/products`, {
             headers: tokenHeader,
         });
 
         assert.equal(listResponse.status, 200);
-        const productList = (await listResponse.json()) as any[];
+        const productList = (await listResponse.json()) as IntegrationApiObject[];
         assert.ok(Array.isArray(productList));
-        const listedProduct = productList.find((product: any) => product.sku === sku);
+        const listedProduct = productList.find((product: IntegrationApiObject) => product.sku === sku);
         assert.ok(listedProduct);
         assert.equal(listedProduct.stock_on_hand, 10, "Successful sale should decrement stock exactly once");
 
@@ -1621,7 +1816,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             headers: tokenHeader,
         });
         assert.equal(saleDetailsResponse.status, 200);
-        const saleDetails = (await saleDetailsResponse.json() as any).sale;
+        const saleDetails = (await saleDetailsResponse.json() as IntegrationApiObject).sale;
         const saleItemId = saleDetails.items[0].id;
         assert.equal(Number(saleDetails.items[0].unit_cost), 12.5);
         assert.equal(Number(saleDetails.items[0].cogs_total), 25);
@@ -1647,7 +1842,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             }),
         });
         assert.equal(returnRequestResponse.status, 201, "Valid return request should be created");
-        const returnRequestBody = (await returnRequestResponse.json()) as any;
+        const returnRequestBody = (await returnRequestResponse.json()) as IntegrationApiObject;
         createdReturnRequestId = returnRequestBody.request.id;
 
         const approvalResponse = await fetch(`http://127.0.0.1:${port}/admin/returns/approve/${createdReturnRequestId}`, {
@@ -1656,7 +1851,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             body: JSON.stringify({ refund_method: "store_credit" }),
         });
         assert.equal(approvalResponse.status, 200, "Manager should be able to approve a valid store-credit return");
-        const storeCreditApprovalBody = await approvalResponse.json() as any;
+        const storeCreditApprovalBody = await approvalResponse.json() as IntegrationApiObject;
         assert.ok(storeCreditApprovalBody.storeCreditBarcode, "A return without a customer must create a store-credit voucher");
         const returnedStoreCredit = await AppDataSource.getRepository(StoreCredit).findOneByOrFail({
             barcode: storeCreditApprovalBody.storeCreditBarcode,
@@ -1666,7 +1861,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             headers: tokenHeader,
         });
         assert.equal(returnsListResponse.status, 200);
-        const returnsList = await returnsListResponse.json() as any[];
+        const returnsList = await returnsListResponse.json() as IntegrationApiObject[];
         const listedWalkInReturn = returnsList.find((request) => request.id === createdReturnRequestId);
         assert.ok(listedWalkInReturn, "Approved walk-in return should remain traceable in return history");
         assert.equal(listedWalkInReturn.invoice_number, `INV-${createdSaleId.toUpperCase().replace(/-/g, "")}`);
@@ -1701,7 +1896,7 @@ test("admin can access protected product workflow and reject unauthorized reques
         const returnedSaleResponse = await fetch(`http://127.0.0.1:${port}/api/sales/${createdSaleId}`, {
             headers: tokenHeader,
         });
-        const returnedSaleDetails = (await returnedSaleResponse.json() as any).sale;
+        const returnedSaleDetails = (await returnedSaleResponse.json() as IntegrationApiObject).sale;
         assert.equal(returnedSaleDetails.status, "partially_refunded");
 
         const exchangeReturnResponse = await fetch(`http://127.0.0.1:${port}/api/returns/request`, {
@@ -1714,7 +1909,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             }),
         });
         assert.equal(exchangeReturnResponse.status, 201);
-        const exchangeReturnBody = await exchangeReturnResponse.json() as any;
+        const exchangeReturnBody = await exchangeReturnResponse.json() as IntegrationApiObject;
         createdExchangeReturnRequestId = exchangeReturnBody.request.id;
         const savedExchangeReturn = await AppDataSource.getRepository(ReturnRequest).findOneOrFail({
             where: { id: createdExchangeReturnRequestId },
@@ -1732,7 +1927,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             }),
         });
         assert.equal(exchangeApprovalResponse.status, 200, "Exchange approval should issue store-credit value");
-        const exchangeApprovalBody = await exchangeApprovalResponse.json() as any;
+        const exchangeApprovalBody = await exchangeApprovalResponse.json() as IntegrationApiObject;
         assert.ok(exchangeApprovalBody.storeCreditBarcode);
         const exchangeCredit = await AppDataSource.getRepository(StoreCredit).findOneByOrFail({
             barcode: exchangeApprovalBody.storeCreditBarcode,
@@ -1768,7 +1963,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             }),
         });
         assert.equal(reservedCheckoutResponse.status, 201, "Checkout must reserve stock before starting a mobile payment");
-        const reservedCheckout = await reservedCheckoutResponse.json() as any;
+        const reservedCheckout = await reservedCheckoutResponse.json() as IntegrationApiObject;
         assert.equal(Number(reservedCheckout.total_amount), 18);
         const reservedProductDeleteResponse = await fetch(`http://127.0.0.1:${port}/api/products/${createdProduct.id}`, {
             method: "DELETE",
@@ -1883,7 +2078,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             }
         }
         assert.equal(mpesaInitiationResponse.status, 200, "Valid STK request should be accepted by the mocked Daraja gateway");
-        const mpesaInitiation = await mpesaInitiationResponse.json() as any;
+        const mpesaInitiation = await mpesaInitiationResponse.json() as IntegrationApiObject;
         assert.equal(mpesaInitiation.checkout_request_id, stkCheckoutRequestId);
         assert.ok(callbackUrl, "The mocked Daraja request should include a callback URL");
         const saleWhileStkPendingResponse = await fetch(`http://127.0.0.1:${port}/api/sales`, {
@@ -1900,7 +2095,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             }),
         });
         assert.equal(saleWhileStkPendingResponse.status, 400, "A sale must not close a checkout while STK confirmation is pending");
-        assert.match((await saleWhileStkPendingResponse.json() as any).message, /M-Pesa payment is still pending/i);
+        assert.match((await saleWhileStkPendingResponse.json() as IntegrationApiObject).message, /M-Pesa payment is still pending/i);
 
         const pendingCheckout = await AppDataSource.getRepository(MpesaTransaction).findOneByOrFail({
             checkout_request_id: stkCheckoutRequestId,
@@ -1957,7 +2152,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             { headers: tokenHeader },
         );
         assert.equal(confirmedCheckoutResponse.status, 200);
-        const confirmedCheckout = await confirmedCheckoutResponse.json() as any;
+        const confirmedCheckout = await confirmedCheckoutResponse.json() as IntegrationApiObject;
         assert.equal(confirmedCheckout.status, "completed");
         assert.equal(Number(confirmedCheckout.amount), 18);
 
@@ -1990,7 +2185,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             body: JSON.stringify(mpesaSalePayload),
         });
         assert.equal(mpesaSaleResponse.status, 201, "Fully paid M-Pesa sale should be created");
-        const mpesaSale = (await mpesaSaleResponse.json()) as any;
+        const mpesaSale = (await mpesaSaleResponse.json()) as IntegrationApiObject;
         createdMpesaSaleId = mpesaSale.id;
         assert.equal(mpesaSale.payment_status, "paid");
         assert.equal(Number(mpesaSale.mpesa_amount), 18);
@@ -2015,7 +2210,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             body: JSON.stringify(mpesaSalePayload),
         });
         assert.equal(duplicateMpesaSaleResponse.status, 200, "Retrying a processed checkout must return the original sale");
-        assert.equal((await duplicateMpesaSaleResponse.json() as any).sale.id, createdMpesaSaleId);
+        assert.equal((await duplicateMpesaSaleResponse.json() as IntegrationApiObject).sale.id, createdMpesaSaleId);
 
         const reusedCheckoutResponse = await fetch(`http://127.0.0.1:${port}/api/sales`, {
             method: "POST",
@@ -2075,7 +2270,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             const configAfterFailedReregistrationResponse = await fetch(`http://127.0.0.1:${port}/api/payments/mpesa/config`, {
                 headers: tokenHeader,
             });
-            const configAfterFailedReregistration = await configAfterFailedReregistrationResponse.json() as any;
+            const configAfterFailedReregistration = await configAfterFailedReregistrationResponse.json() as IntegrationApiObject;
             assert.equal(
                 configAfterFailedReregistration.paybill_c2b_enabled,
                 true,
@@ -2097,7 +2292,7 @@ test("admin can access protected product workflow and reject unauthorized reques
         const paymentConfigResponse = await fetch(`http://127.0.0.1:${port}/api/payments/mpesa/config`, {
             headers: tokenHeader,
         });
-        const paymentConfig = await paymentConfigResponse.json() as any;
+        const paymentConfig = await paymentConfigResponse.json() as IntegrationApiObject;
         assert.equal(paymentConfig.paybill_c2b_enabled, true);
 
         const paybillCheckoutSessionId = randomUUID();
@@ -2143,13 +2338,13 @@ test("admin can access protected product workflow and reject unauthorized reques
             }),
         });
         assert.equal(paybillIntentResponse.status, 201, "Paybill checkout should return a unique automatic matching reference");
-        const paybillIntent = await paybillIntentResponse.json() as any;
+        const paybillIntent = await paybillIntentResponse.json() as IntegrationApiObject;
         const recoveredPaybillStatusResponse = await fetch(
             `http://127.0.0.1:${port}/api/payments/mpesa/session/${paybillCheckoutSessionId}`,
             { headers: tokenHeader },
         );
         assert.equal(recoveredPaybillStatusResponse.status, 200);
-        const recoveredPaybillStatus = await recoveredPaybillStatusResponse.json() as any;
+        const recoveredPaybillStatus = await recoveredPaybillStatusResponse.json() as IntegrationApiObject;
         assert.equal(recoveredPaybillStatus.id, paybillIntent.transaction_id);
         assert.equal(recoveredPaybillStatus.status, "pending", "Refresh recovery must prioritize an active request over a later-dated failed attempt");
         const duplicatePaybillIntentResponse = await fetch(`http://127.0.0.1:${port}/api/payments/mpesa/paybill-intent`, {
@@ -2175,7 +2370,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             `http://127.0.0.1:${port}/api/webhooks/mpesa/c2b/validation?callback_token=${paybillCallbackToken}`,
             { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c2bNotification) },
         );
-        assert.equal((await c2bValidationResponse.json() as any).ResultCode, 0);
+        assert.equal((await c2bValidationResponse.json() as IntegrationApiObject).ResultCode, 0);
         const alteredC2bResponse = await fetch(
             `http://127.0.0.1:${port}/api/webhooks/mpesa/c2b/confirmation?callback_token=${paybillCallbackToken}`,
             {
@@ -2229,7 +2424,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             }),
         });
         assert.equal(paybillSaleResponse.status, 201, "Verified Paybill payment should be consumable by exactly one sale");
-        const paybillSale = await paybillSaleResponse.json() as any;
+        const paybillSale = await paybillSaleResponse.json() as IntegrationApiObject;
         createdPaybillSaleId = paybillSale.id;
         assert.equal(paybillSale.payment_status, "paid");
         const paybillSaleJournal = await AppDataSource.getRepository(JournalEntry).findOneByOrFail({
@@ -2255,7 +2450,7 @@ test("admin can access protected product workflow and reject unauthorized reques
         const mpesaSaleDetailsResponse = await fetch(`http://127.0.0.1:${port}/api/sales/${createdMpesaSaleId}`, {
             headers: tokenHeader,
         });
-        const mpesaSaleDetails = (await mpesaSaleDetailsResponse.json() as any).sale;
+        const mpesaSaleDetails = (await mpesaSaleDetailsResponse.json() as IntegrationApiObject).sale;
         const mpesaSaleItemId = mpesaSaleDetails.items[0].id;
 
         const concurrentReturnRequests = await Promise.all([1, 2].map(() =>
@@ -2276,7 +2471,7 @@ test("admin can access protected product workflow and reject unauthorized reques
         );
         const successfulReturnResponse = concurrentReturnRequests.find((response) => response.status === 201);
         assert.ok(successfulReturnResponse);
-        const mpesaReturnRequestBody = await successfulReturnResponse.json() as any;
+        const mpesaReturnRequestBody = await successfulReturnResponse.json() as IntegrationApiObject;
         createdMpesaReturnRequestId = mpesaReturnRequestBody.request.id;
 
         const shiftBeforeMpesaRefundApproval = await AppDataSource.getRepository(Shift).findOneByOrFail({
@@ -2389,7 +2584,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             body: JSON.stringify({}),
         });
         assert.equal(missingActualCashResponse.status, 400, "Shift close must require a physical cash count");
-        assert.match((await missingActualCashResponse.json() as any).error, /actual_cash is required/i);
+        assert.match((await missingActualCashResponse.json() as IntegrationApiObject).error, /actual_cash is required/i);
         const shiftAfterMissingCash = await AppDataSource.getRepository(Shift).findOneByOrFail({ id: openedShift.id });
         assert.equal(shiftAfterMissingCash.status, "open", "A missing cash count must not close the shift");
         const blockedCloseResponse = await fetch(`http://127.0.0.1:${port}/api/shifts/${openedShift.id}/close`, {
@@ -2398,7 +2593,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             body: JSON.stringify({ actual_cash: 136 }),
         });
         assert.equal(blockedCloseResponse.status, 409);
-        assert.match((await blockedCloseResponse.json() as any).message, /resolve pending m-pesa payments/i);
+        assert.match((await blockedCloseResponse.json() as IntegrationApiObject).message, /resolve pending m-pesa payments/i);
         const stillOpenShift = await AppDataSource.getRepository(Shift).findOneByOrFail({ id: openedShift.id });
         assert.equal(stillOpenShift.status, "open");
         await AppDataSource.getRepository(MpesaTransaction).delete({ id: unresolvedMpesaTransaction.id });
@@ -2410,7 +2605,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             body: JSON.stringify({ actual_cash: 136 }),
         });
         assert.equal(closeShiftResponse.status, 200, "Cashier should be able to close the shift");
-        const closedShift = (await closeShiftResponse.json() as any).shift;
+        const closedShift = (await closeShiftResponse.json() as IntegrationApiObject).shift;
         assert.equal(
             closedShift.expected_cash,
             151.11,
@@ -2436,7 +2631,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             }),
         });
         assert.equal(purchaseOrderResponse.status, 201, "Admin should be able to create a purchase order");
-        const createdPurchaseOrder = (await purchaseOrderResponse.json()) as any;
+        const createdPurchaseOrder = (await purchaseOrderResponse.json()) as IntegrationApiObject;
         createdPurchaseOrderId = createdPurchaseOrder.id;
 
         const bypassReceiptStatusResponse = await fetch(`http://127.0.0.1:${port}/api/purchase-orders/${createdPurchaseOrderId}/status`, {
@@ -2496,7 +2691,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             }),
         });
         assert.equal(excessiveReceiveResponse.status, 400, "Receiving more than the ordered quantity must be rejected as invalid input");
-        const excessiveReceiveBody = (await excessiveReceiveResponse.json()) as any;
+        const excessiveReceiveBody = (await excessiveReceiveResponse.json()) as IntegrationApiObject;
         assert.equal(excessiveReceiveBody.message, "Receiving quantities exceed the purchase order");
         const stockAfterRejectedReceive = await AppDataSource.getRepository(Product).findOneByOrFail({ id: createdProduct.id });
         assert.equal(stockAfterRejectedReceive.stock_on_hand, 10, "Rejected receipt must not change stock");
@@ -2519,7 +2714,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             }),
         });
         assert.equal(receiveResponse.status, 200, "Receiving a valid purchase-order quantity should succeed");
-        const receivedOrder = (await receiveResponse.json()) as any;
+        const receivedOrder = (await receiveResponse.json()) as IntegrationApiObject;
         assert.equal(receivedOrder.po.status, "received");
 
         const replenishedProduct = await AppDataSource.getRepository(Product).findOneByOrFail({ id: createdProduct.id });
@@ -2539,13 +2734,13 @@ test("admin can access protected product workflow and reject unauthorized reques
         assert.equal(new Date(receivedDeliveryNote.items[0].expiry_date).toISOString().slice(0, 10), "2027-01-01");
         const deliveryNotesResponse = await fetch(`http://127.0.0.1:${port}/api/delivery-notes`, { headers: tokenHeader });
         assert.equal(deliveryNotesResponse.status, 200);
-        const deliveryNotes = await deliveryNotesResponse.json() as any[];
+        const deliveryNotes = await deliveryNotesResponse.json() as IntegrationApiObject[];
         assert.ok(deliveryNotes.some((note) => note.id === receivedDeliveryNote.id));
         const deliveryNoteDetailsResponse = await fetch(`http://127.0.0.1:${port}/api/delivery-notes/${receivedDeliveryNote.id}`, {
             headers: tokenHeader,
         });
         assert.equal(deliveryNoteDetailsResponse.status, 200);
-        const deliveryNoteDetails = await deliveryNoteDetailsResponse.json() as any;
+        const deliveryNoteDetails = await deliveryNoteDetailsResponse.json() as IntegrationApiObject;
         assert.equal(deliveryNoteDetails.items.length, 1);
         assert.equal(deliveryNoteDetails.items[0].received_quantity, 5);
 
@@ -2584,7 +2779,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             }),
         });
         assert.equal(discrepancyInvoiceResponse.status, 201);
-        const discrepancyInvoice = (await discrepancyInvoiceResponse.json() as any).invoice;
+        const discrepancyInvoice = (await discrepancyInvoiceResponse.json() as IntegrationApiObject).invoice;
         createdSupplierInvoiceIds.push(discrepancyInvoice.id);
         assert.equal(discrepancyInvoice.status, InvoiceStatus.DISCREPANCY);
 
@@ -2608,7 +2803,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             }),
         });
         assert.equal(matchedInvoiceResponse.status, 201);
-        const matchedInvoice = (await matchedInvoiceResponse.json() as any).invoice;
+        const matchedInvoice = (await matchedInvoiceResponse.json() as IntegrationApiObject).invoice;
         createdSupplierInvoiceIds.push(matchedInvoice.id);
         assert.equal(matchedInvoice.status, InvoiceStatus.MATCHED, "Invoice matching must compare against the received GRN value, not the full PO value");
 
@@ -2648,7 +2843,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             body: JSON.stringify({ amount: 20, payment_method: "bank_transfer" }),
         });
         assert.equal(partialPaymentResponse.status, 201);
-        const partialPaymentResult = await partialPaymentResponse.json() as any;
+        const partialPaymentResult = await partialPaymentResponse.json() as IntegrationApiObject;
         createdSupplierPaymentIds.push(partialPaymentResult.payment.id);
         assert.equal(partialPaymentResult.invoice.balance_due, 30);
 
@@ -2671,7 +2866,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             body: JSON.stringify({ amount: 30, payment_method: "bank_transfer" }),
         });
         assert.equal(finalPaymentResponse.status, 201);
-        const finalPaymentResult = await finalPaymentResponse.json() as any;
+        const finalPaymentResult = await finalPaymentResponse.json() as IntegrationApiObject;
         createdSupplierPaymentIds.push(finalPaymentResult.payment.id);
         assert.equal(finalPaymentResult.invoice.status, InvoiceStatus.PAID);
         assert.equal(finalPaymentResult.invoice.balance_due, 0);
@@ -2686,7 +2881,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             }),
         });
         assert.equal(rejectedPurchaseOrderResponse.status, 201);
-        const rejectedPurchaseOrder = await rejectedPurchaseOrderResponse.json() as any;
+        const rejectedPurchaseOrder = await rejectedPurchaseOrderResponse.json() as IntegrationApiObject;
         createdRejectedPurchaseOrderId = rejectedPurchaseOrder.id;
         const sendRejectedPurchaseOrderResponse = await fetch(`http://127.0.0.1:${port}/api/purchase-orders/${createdRejectedPurchaseOrderId}/status`, {
             method: "PUT",
@@ -2738,7 +2933,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             }),
         });
         assert.equal(warehouseSaleResponse.status, 201, "Received stock must be available to sell from the destination warehouse");
-        const warehouseSaleBody = await warehouseSaleResponse.json() as any;
+        const warehouseSaleBody = await warehouseSaleResponse.json() as IntegrationApiObject;
         createdWarehouseReceiptSaleId = warehouseSaleBody.id;
         const saleMovement = await AppDataSource.getRepository(StockMovement).findOneByOrFail({
             reference_type: "sale",
@@ -2761,7 +2956,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             body: JSON.stringify({ warehouse_id: receivingWarehouse.id, notes: "Integration complete-count control" }),
         });
         assert.equal(stockTakeResponse.status, 201);
-        const stockTake = await stockTakeResponse.json() as any;
+        const stockTake = await stockTakeResponse.json() as IntegrationApiObject;
         createdStockTakeId = stockTake.id;
         assert.equal(stockTake.items.length, 1);
 
@@ -2771,7 +2966,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             body: JSON.stringify({}),
         });
         assert.equal(incompleteCompletionResponse.status, 400, "Stock takes with uncounted lines must not close");
-        const incompleteCompletionBody = await incompleteCompletionResponse.json() as any;
+        const incompleteCompletionBody = await incompleteCompletionResponse.json() as IntegrationApiObject;
         assert.equal(incompleteCompletionBody.message, "Every stock-take item must be counted before completion");
 
         const saveStockTakeCountsResponse = await fetch(`http://127.0.0.1:${port}/api/inventory/stock-takes/${stockTake.id}/items`, {
@@ -2845,7 +3040,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             }),
         });
         assert.equal(manualAdjustmentResponse.status, 201);
-        const manualAdjustment = await manualAdjustmentResponse.json() as any;
+        const manualAdjustment = await manualAdjustmentResponse.json() as IntegrationApiObject;
         const manualAdjustmentMovement = await AppDataSource.getRepository(StockMovement).findOneByOrFail({
             product_id: createdProduct.id,
             movement_type: "damaged",
@@ -2876,7 +3071,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             }),
         });
         assert.equal(transferCreateResponse.status, 201);
-        const transfer = await transferCreateResponse.json() as any;
+        const transfer = await transferCreateResponse.json() as IntegrationApiObject;
         const transferCompleteResponse = await fetch(`http://127.0.0.1:${port}/api/inventory/transfer/${transfer.id}/status`, {
             method: "PUT",
             headers: { ...tokenHeader, "Content-Type": "application/json" },
@@ -2889,8 +3084,8 @@ test("admin can access protected product workflow and reject unauthorized reques
             reference_id: transfer.id,
         });
         assert.equal(transferMovements.length, 2);
-        assert.ok(transferMovements.some((movement: any) => movement.movement_type === "transfer_out" && movement.quantity === -1 && movement.quantity_before === 12 && movement.quantity_after === 11));
-        assert.ok(transferMovements.some((movement: any) => movement.movement_type === "transfer_in" && movement.quantity === 1 && movement.quantity_before === 0 && movement.quantity_after === 1));
+        assert.ok(transferMovements.some((movement) => movement.movement_type === "transfer_out" && movement.quantity === -1 && movement.quantity_before === 12 && movement.quantity_after === 11));
+        assert.ok(transferMovements.some((movement) => movement.movement_type === "transfer_in" && movement.quantity === 1 && movement.quantity_before === 0 && movement.quantity_after === 1));
 
         const partialPurchaseOrderResponse = await fetch(`http://127.0.0.1:${port}/api/purchase-orders`, {
             method: "POST",
@@ -2902,7 +3097,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             }),
         });
         assert.equal(partialPurchaseOrderResponse.status, 201);
-        const partialPurchaseOrder = await partialPurchaseOrderResponse.json() as any;
+        const partialPurchaseOrder = await partialPurchaseOrderResponse.json() as IntegrationApiObject;
         assert.equal(partialPurchaseOrder.items.length, 1);
         assert.equal(partialPurchaseOrder.items[0].quantity, 2);
         createdPartialPurchaseOrderId = partialPurchaseOrder.id;
@@ -2930,7 +3125,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             }),
         });
         assert.equal(firstPartialReceiptResponse.status, 200);
-        const firstPartialReceipt = await firstPartialReceiptResponse.json() as any;
+        const firstPartialReceipt = await firstPartialReceiptResponse.json() as IntegrationApiObject;
         assert.equal(firstPartialReceipt.po.status, "partially_received");
         const persistedAfterFirstPartialReceipt = await AppDataSource.getRepository(PurchaseOrder).findOne({
             where: { id: createdPartialPurchaseOrderId },
@@ -2957,7 +3152,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             }),
         });
         assert.equal(secondPartialReceiptResponse.status, 200);
-        const completedPartialReceipt = await secondPartialReceiptResponse.json() as any;
+        const completedPartialReceipt = await secondPartialReceiptResponse.json() as IntegrationApiObject;
         const persistedPartialPurchaseOrder = await AppDataSource.getRepository(PurchaseOrder).findOne({
             where: { id: createdPartialPurchaseOrderId },
             relations: ["items"],
@@ -2996,7 +3191,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             body: importForm,
         });
         assert.equal(importResponse.status, 201, "CSV product import should return HTTP 201");
-        const importResult = await importResponse.json() as any;
+        const importResult = await importResponse.json() as IntegrationApiObject;
         assert.equal(importResult.created, 1);
         assert.equal(importResult.skipped, 2);
         assert.equal(importResult.errors.length, 2);
@@ -3028,7 +3223,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             body: unsupportedImportForm,
         });
         assert.equal(unsupportedImportResponse.status, 400);
-        assert.match((await unsupportedImportResponse.json() as any).message, /CSV and Excel files are allowed/i);
+        assert.match((await unsupportedImportResponse.json() as IntegrationApiObject).message, /CSV and Excel files are allowed/i);
 
         const oversizedImportForm = new FormData();
         oversizedImportForm.append(
@@ -3042,10 +3237,45 @@ test("admin can access protected product workflow and reject unauthorized reques
             body: oversizedImportForm,
         });
         assert.equal(oversizedImportResponse.status, 413);
-        assert.match((await oversizedImportResponse.json() as any).message, /5 MB or smaller/i);
+        assert.match((await oversizedImportResponse.json() as IntegrationApiObject).message, /5 MB or smaller/i);
     } finally {
         await new Promise<void>((resolve, reject) => {
             server.close((error) => (error ? reject(error) : resolve()));
+        });
+    }
+});
+
+test("PostgreSQL API serves a concurrent authenticated read burst without rejecting valid traffic", async () => {
+    const server = app.listen(0);
+    await once(server, "listening");
+
+    try {
+        const port = (server.address() as AddressInfo).port;
+        const token = jwt.sign(
+            { id: adminUserId, email: adminEmail, role: AppRole.ADMIN },
+            process.env.JWT_SECRET as string,
+            { expiresIn: "1h" },
+        );
+        const startedAt = Date.now();
+        const responses = await Promise.all(
+            Array.from({ length: 150 }, () =>
+                fetch(`http://127.0.0.1:${port}/api/auth/me`, {
+                    headers: { Authorization: `Bearer ${token}` },
+                }),
+            ),
+        );
+        const durationMs = Date.now() - startedAt;
+        const statuses = responses.map((response) => response.status);
+
+        assert.deepEqual(
+            statuses.filter((status) => status !== 200),
+            [],
+            `Expected 150 concurrent authenticated reads to succeed; got statuses ${statuses.join(",")}`,
+        );
+        assert.ok(durationMs < 30000, `Concurrent read burst took ${durationMs}ms`);
+    } finally {
+        await new Promise<void>((resolve, reject) => {
+            server.close((error) => error ? reject(error) : resolve());
         });
     }
 });
@@ -3142,7 +3372,7 @@ test("parking a sale with a missing product leaves no partial parked sale", asyn
         );
 
         assert.equal(response.status, 400);
-        assert.match((await response.json() as any).message, /product .* not found/i);
+        assert.match((await response.json() as IntegrationApiObject).message, /product .* not found/i);
         assert.equal(
             await saleRepository.count({
                 where: { cashier: { id: cashier.id }, status: SaleStatus.PARKED },
@@ -3287,7 +3517,7 @@ test("admin can create a customer through the API business flow", async () => {
         });
 
         assert.equal(response.status, 201, "Customer creation should return HTTP 201");
-        const createdCustomer = (await response.json()) as any;
+        const createdCustomer = (await response.json()) as IntegrationApiObject;
         assert.equal(createdCustomer.name, customerPayload.name);
         assert.equal(createdCustomer.phone, customerPayload.phone);
     } finally {
@@ -3330,8 +3560,9 @@ test("user can register, verify login OTP, and access their profile", async () =
             body: JSON.stringify({ email: registeredAuthEmail, password: "IntegrationPass123!" }),
         });
         assert.equal(failedDeliveryResponse.status, 503, "Failed OTP delivery must not start an authenticated session");
-        const failedDeliveryBody = (await failedDeliveryResponse.json()) as any;
+        const failedDeliveryBody = (await failedDeliveryResponse.json()) as IntegrationApiObject;
         assert.equal(failedDeliveryBody.otp_token, undefined);
+        assert.match(failedDeliveryBody.message, /OTP email|email provider/i);
         const registeredUser = await AppDataSource.getRepository(User).findOneByOrFail({ email: registeredAuthEmail });
         const activeOtps = await AppDataSource.getRepository(OtpCode).countBy({ user_id: registeredUser.id, is_used: false });
         assert.equal(activeOtps, 0, "OTP from a failed delivery must be invalidated");
@@ -3343,7 +3574,7 @@ test("user can register, verify login OTP, and access their profile", async () =
             body: JSON.stringify({ email: registeredAuthEmail, password: "IntegrationPass123!" }),
         });
         assert.equal(loginResponse.status, 200, "Valid credentials should start OTP verification");
-        const loginBody = (await loginResponse.json()) as any;
+        const loginBody = (await loginResponse.json()) as IntegrationApiObject;
         assert.equal(loginBody.requires_otp, true);
         assert.match(capturedOtp, /^\d{6}$/);
 
@@ -3361,7 +3592,7 @@ test("user can register, verify login OTP, and access their profile", async () =
             body: JSON.stringify({ otp_token: loginBody.otp_token, code: capturedOtp }),
         });
         assert.equal(verifyResponse.status, 200, "Valid OTP should complete authentication");
-        const verifiedSession = (await verifyResponse.json()) as any;
+        const verifiedSession = (await verifyResponse.json()) as IntegrationApiObject;
         assert.equal(verifiedSession.user.email, registeredAuthEmail);
         assert.equal(verifiedSession.user.role, "cashier");
 
@@ -3369,7 +3600,7 @@ test("user can register, verify login OTP, and access their profile", async () =
             headers: { Authorization: `Bearer ${verifiedSession.token}` },
         });
         assert.equal(profileResponse.status, 200, "Verified access token should authorize profile access");
-        const profileBody = (await profileResponse.json()) as any;
+        const profileBody = (await profileResponse.json()) as IntegrationApiObject;
         assert.equal(profileBody.profile.full_name, "Integration Auth User");
     } finally {
         EmailService.sendOtpEmail = originalSendOtpEmail;

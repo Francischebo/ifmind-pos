@@ -1,9 +1,21 @@
 export const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:3000/api";
 
+export class ApiRequestError extends Error {
+    constructor(message: string, readonly status: number) {
+        super(message);
+        this.name = "ApiRequestError";
+    }
+}
+
+export class ApiNetworkError extends Error {
+    constructor(message: string, readonly cause?: unknown) {
+        super(message);
+        this.name = "ApiNetworkError";
+    }
+}
+
 export class ApiService {
     static async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-        const token = localStorage.getItem("jwt_token");
-
         const headers = new Headers(options.headers || {});
         const hasBody = !!options.body && !(options.method && ["GET", "HEAD"].includes(options.method.toUpperCase()));
 
@@ -11,19 +23,19 @@ export class ApiService {
             headers.set("Content-Type", "application/json");
         }
 
-        if (token) {
-            headers.set("Authorization", `Bearer ${token}`);
-        }
-
         let response: Response;
 
         try {
             response = await fetch(`${API_BASE_URL}${endpoint}`, {
+                credentials: options.credentials ?? "include",
                 ...options,
                 headers,
             });
         } catch (error) {
-            throw new Error("Unable to reach the server. Please check your connection and try again.");
+            throw new ApiNetworkError(
+                "Unable to reach the server. Please check your connection and try again.",
+                error,
+            );
         }
 
         if (!response.ok) {
@@ -46,7 +58,7 @@ export class ApiService {
                 // Ignore parse errors if the response is not valid JSON/text
             }
 
-            throw new Error(errorMsg);
+            throw new ApiRequestError(errorMsg, response.status);
         }
 
         if (response.status === 204) {
@@ -55,13 +67,16 @@ export class ApiService {
 
         const contentType = response.headers.get("content-type") || "";
         if (!contentType.includes("application/json")) {
-            return {} as T;
+            throw new ApiRequestError("The server returned an unexpected response.", response.status);
         }
 
         try {
             return (await response.json()) as T;
-        } catch {
-            return {} as T;
+        } catch (error) {
+            throw new ApiRequestError(
+                "The server returned an invalid JSON response.",
+                response.status,
+            );
         }
     }
 
@@ -69,11 +84,11 @@ export class ApiService {
         return this.request<T>(endpoint, { ...options, method: "GET" });
     }
 
-    static post<T>(endpoint: string, body: any, options?: RequestInit) {
+    static post<T>(endpoint: string, body: unknown, options?: RequestInit) {
         return this.request<T>(endpoint, { ...options, method: "POST", body: JSON.stringify(body) });
     }
 
-    static put<T>(endpoint: string, body: any, options?: RequestInit) {
+    static put<T>(endpoint: string, body: unknown, options?: RequestInit) {
         return this.request<T>(endpoint, { ...options, method: "PUT", body: JSON.stringify(body) });
     }
 

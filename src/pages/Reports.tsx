@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useState, useEffect } from "react";
 import { ApiService } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -54,11 +54,46 @@ import {
   ResponsiveContainer,
 } from "recharts";
 
+interface SalesByPayment {
+  method: string;
+  count: number;
+  total: number;
+}
+
+interface TopProduct {
+  product_id: string;
+  name: string;
+  sku: string;
+  total_quantity: number;
+}
+
+interface LowStockProduct {
+  id: string;
+  name: string;
+  sku: string;
+  stock_on_hand: number;
+  reorder_level: number;
+}
+
+interface CashierPerformance {
+  cashier_id: string;
+  name: string;
+  total: number;
+  count: number;
+}
+
+interface ReportSummary {
+  salesByPayment: SalesByPayment[];
+  topProducts: TopProduct[];
+  lowStock: LowStockProduct[];
+  cashierPerformance: CashierPerformance[];
+}
+
 export default function Reports() {
-  const [salesByPayment, setSalesByPayment] = useState<any[]>([]);
-  const [topProducts, setTopProducts] = useState<any[]>([]);
-  const [lowStock, setLowStock] = useState<any[]>([]);
-  const [cashierPerformance, setCashierPerformance] = useState<any[]>([]);
+  const [salesByPayment, setSalesByPayment] = useState<SalesByPayment[]>([]);
+  const [topProducts, setTopProducts] = useState<TopProduct[]>([]);
+  const [lowStock, setLowStock] = useState<LowStockProduct[]>([]);
+  const [cashierPerformance, setCashierPerformance] = useState<CashierPerformance[]>([]);
   const [dateRange, setDateRange] = useState("today");
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(
     new Date(),
@@ -68,27 +103,7 @@ export default function Reports() {
     "day",
   );
 
-  useEffect(() => {
-    loadReports();
-  }, [dateRange, selectedDate, customDateMode]);
-
-  const loadReports = async () => {
-    try {
-      const startDate = getStartDate(dateRange);
-      const endDate = getEndDate();
-      const report = await ApiService.get<any>(
-        `/reports/summary?start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}`,
-      );
-      setSalesByPayment(report.salesByPayment || []);
-      setTopProducts(report.topProducts || []);
-      setLowStock(report.lowStock || []);
-      setCashierPerformance(report.cashierPerformance || []);
-    } catch (error) {
-      console.error("Error loading reports:", error);
-    }
-  };
-
-  const getStartDate = (range: string) => {
+  const getStartDate = useCallback((range: string) => {
     if (customDateMode && selectedDate) {
       let startDate: Date;
       let endDate: Date;
@@ -128,9 +143,9 @@ export default function Reports() {
       default:
         return now.toISOString();
     }
-  };
+  }, [customDateMode, rangeMode, selectedDate]);
 
-  const getEndDate = () => {
+  const getEndDate = useCallback(() => {
     if (!customDateMode || !selectedDate) {
       return new Date().toISOString();
     }
@@ -158,7 +173,27 @@ export default function Reports() {
         endDate.setHours(23, 59, 59, 999);
         return endDate.toISOString();
     }
-  };
+  }, [customDateMode, rangeMode, selectedDate]);
+
+  const loadReports = useCallback(async () => {
+    try {
+      const startDate = getStartDate(dateRange);
+      const endDate = getEndDate();
+      const report = await ApiService.get<ReportSummary>(
+        `/reports/summary?start=${encodeURIComponent(startDate)}&end=${encodeURIComponent(endDate)}`,
+      );
+      setSalesByPayment(report.salesByPayment || []);
+      setTopProducts(report.topProducts || []);
+      setLowStock(report.lowStock || []);
+      setCashierPerformance(report.cashierPerformance || []);
+    } catch (error) {
+      console.error("Error loading reports:", error);
+    }
+  }, [dateRange, getEndDate, getStartDate]);
+
+  useEffect(() => {
+    void loadReports();
+  }, [loadReports]);
 
   const handleDateSelect = (date: Date | undefined) => {
     setSelectedDate(date);
@@ -173,9 +208,11 @@ export default function Reports() {
       case "day":
         return format(selectedDate, "PPP");
       case "week":
+        {
         const weekStart = startOfWeek(selectedDate, { weekStartsOn: 1 });
         const weekEnd = endOfWeek(selectedDate, { weekStartsOn: 1 });
         return `${format(weekStart, "MMM d")} - ${format(weekEnd, "MMM d, yyyy")}`;
+        }
       case "month":
         return format(selectedDate, "MMMM yyyy");
       case "year":

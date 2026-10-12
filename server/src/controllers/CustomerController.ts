@@ -18,24 +18,49 @@ const CUSTOMER_ALLOWED_FIELDS = new Set([
 
 export const sanitizeCustomerPayload = (input: unknown) => {
     if (!input || typeof input !== "object" || Array.isArray(input)) {
-        return {} as Record<string, any>;
+        return {} as Partial<Customer>;
     }
 
-    const sanitized: Record<string, any> = {};
+    const sanitized: Partial<Customer> = {};
+    const textFields = new Set(["name", "phone", "email"]);
+    const numericFields = new Set([
+        "total_purchases",
+        "purchase_count",
+        "credit_limit",
+        "credit_balance",
+        "store_credit_balance",
+    ]);
     for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
         if (!CUSTOMER_ALLOWED_FIELDS.has(key) || value === undefined || value === null) {
             continue;
         }
 
-        if (typeof value === "string") {
+        if (textFields.has(key) && typeof value === "string") {
             const trimmed = value.trim();
             if (trimmed === "" && (key === "name" || key === "phone")) continue;
-            sanitized[key] = trimmed;
+            if (key === "name") sanitized.name = trimmed;
+            else if (key === "phone") sanitized.phone = trimmed;
+            else sanitized.email = trimmed;
             continue;
         }
 
-        if (typeof value === "number" || typeof value === "boolean") {
-            sanitized[key] = value;
+        if (numericFields.has(key)) {
+            const numericValue = typeof value === "number"
+                ? value
+                : typeof value === "string" && value.trim()
+                    ? Number(value)
+                    : Number.NaN;
+            if (!Number.isFinite(numericValue)) continue;
+            if (key === "total_purchases") sanitized.total_purchases = numericValue;
+            else if (key === "purchase_count") sanitized.purchase_count = numericValue;
+            else if (key === "credit_limit") sanitized.credit_limit = numericValue;
+            else if (key === "credit_balance") sanitized.credit_balance = numericValue;
+            else sanitized.store_credit_balance = numericValue;
+            continue;
+        }
+
+        if (key === "is_frequent" && typeof value === "boolean") {
+            sanitized.is_frequent = value;
         }
     }
 

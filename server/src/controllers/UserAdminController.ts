@@ -1,7 +1,9 @@
 import { Request, Response } from "express";
+import { AuthenticatedRequest } from "../middleware/auth";
 import { AppDataSource } from "../data-source";
 import { User, AppRole } from "../entity/User";
 import { Profile } from "../entity/Profile";
+import * as bcrypt from "bcryptjs";
 
 const userRepository = AppDataSource.getRepository(User);
 const profileRepository = AppDataSource.getRepository(Profile);
@@ -17,6 +19,37 @@ const normalizeEmail = (value: unknown) => {
     }
 
     return email;
+};
+
+export const sanitizeUserCreatePayload = (input: unknown) => {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+        throw new Error("payload must be an object");
+    }
+
+    const payload = input as Record<string, unknown>;
+    const email = normalizeEmail(payload.email);
+    const password = typeof payload.password === "string" ? payload.password.trim() : "";
+    const full_name = typeof payload.full_name === "string" ? payload.full_name.trim() : "";
+    const rawRole = typeof payload.role === "string" ? payload.role.trim().toLowerCase() : AppRole.CASHIER;
+
+    if (!full_name || full_name.length > 100) {
+        throw new Error("full_name is required and must be under 100 characters");
+    }
+
+    if (!password || password.length < 8 || password.length > 128) {
+        throw new Error("password is required and must be between 8 and 128 characters");
+    }
+
+    if (!Object.values(AppRole).includes(rawRole as AppRole)) {
+        throw new Error("role must be one of the valid application roles");
+    }
+
+    return {
+        email,
+        password,
+        full_name,
+        role: rawRole as AppRole,
+    };
 };
 
 export const sanitizeUserAdminUpdatePayload = (input: unknown) => {
@@ -69,6 +102,45 @@ export const sanitizeUserRolePayload = (input: unknown) => {
 };
 
 export class UserAdminController {
+    static async createUser(req: AuthenticatedRequest, res: Response) {
+        try {
+            const { email, password, full_name, role } = sanitizeUserCreatePayload(req.body);
+            const existingUser = await userRepository.findOne({ where: { email } });
+            if (existingUser) {
+                return res.status(400).json({ message: "A user with this email already exists" });
+            }
+
+            const salt = await bcrypt.genSalt(10);
+            const password_hash = await bcrypt.hash(password, salt);
+
+            const user = new User();
+            user.email = email;
+            user.password_hash = password_hash;
+            user.role = role;
+            user.is_active = true;
+
+            await userRepository.save(user);
+
+            const profile = new Profile();
+            profile.user = user;
+            profile.id = user.id;
+            profile.full_name = full_name;
+
+            await profileRepository.save(profile);
+
+            return res.status(201).json({
+                id: user.id,
+                email: user.email,
+                full_name: profile.full_name,
+                role: user.role,
+                is_active: user.is_active,
+            });
+        } catch (error) {
+            console.error("Error creating user:", error);
+            return res.status(400).json({ message: error instanceof Error ? error.message : "Error creating user" });
+        }
+    }
+
     static async listUsers(req: Request, res: Response) {
         try {
             const users = await userRepository.find({
@@ -136,7 +208,7 @@ export class UserAdminController {
         }
     }
 
-    static async deleteUser(req: any, res: Response) {
+    static async deleteUser(req: AuthenticatedRequest, res: Response) {
         try {
             const targetId = req.params.id as string;
             if (targetId === req.user?.id) {
@@ -163,7 +235,7 @@ export class UserAdminController {
         }
     }
 
-    static async setUserRole(req: any, res: Response) {
+    static async setUserRole(req: AuthenticatedRequest, res: Response) {
         try {
             const { role } = sanitizeUserRolePayload(req.body);
             const user = await userRepository.findOneBy({ id: req.params.id as string });

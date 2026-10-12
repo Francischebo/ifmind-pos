@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useAuth } from "@/hooks/useAuth";
+import { useAuth } from "@/hooks/useAuthContext";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,7 +11,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { ShoppingCart } from "lucide-react";
 import { z } from "zod";
@@ -22,15 +21,11 @@ const loginSchema = z.object({
   password: z.string().min(6, "Password must be at least 6 characters"),
 });
 
-const signupSchema = loginSchema.extend({
-  fullName: z.string().min(2, "Full name must be at least 2 characters"),
-});
-
 export default function Auth() {
-  const { signIn, verifyOtp, signUp, user } = useAuth();
+  const { signIn, verifyOtp, user } = useAuth();
   const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(false);
-  const [authStep, setAuthStep] = useState<"login" | "signup" | "otp">("login");
+  const [authStep, setAuthStep] = useState<"login" | "otp">("login");
   const [currentOtpToken, setCurrentOtpToken] = useState<string | null>(null);
 
   useEffect(() => {
@@ -51,7 +46,7 @@ export default function Auth() {
       loginSchema.parse({ email, password });
       const { error, needsOtp, otpToken } = await signIn(email, password);
       if (error) {
-        const errorMsg = typeof error === "string" ? error : error.message;
+        const errorMsg = error;
         if (errorMsg && errorMsg.includes("Invalid login credentials")) {
           toast.error("Invalid email or password");
         } else {
@@ -81,54 +76,11 @@ export default function Auth() {
 
     const { error } = await verifyOtp(currentOtpToken, code);
     if (error) {
-      toast.error(error.message || "Invalid OTP code");
+      toast.error(error || "Invalid OTP code");
     } else {
       toast.success("Login successful!");
     }
     setIsLoading(false);
-  };
-
-  const handleSignup = async (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    setIsLoading(true);
-
-    const formData = new FormData(e.currentTarget);
-    const email = formData.get("email") as string;
-    const password = formData.get("password") as string;
-    const fullName = formData.get("fullName") as string;
-
-    try {
-      signupSchema.parse({ email, password, fullName });
-      const { error, needsOtp, otpToken } = await signUp(
-        email,
-        password,
-        fullName,
-      );
-      if (error) {
-        const errorMsg = typeof error === "string" ? error : error.message;
-        if (
-          errorMsg &&
-          (errorMsg.includes("already registered") ||
-            errorMsg.includes("User already exists"))
-        ) {
-          toast.error(
-            "This email is already registered. Please login instead.",
-          );
-        } else {
-          toast.error(errorMsg || "Registration failed");
-        }
-      } else if (needsOtp && otpToken) {
-        setCurrentOtpToken(otpToken);
-        setAuthStep("otp");
-        toast.success("Account created! Please check your email for the OTP");
-      }
-    } catch (error) {
-      if (error instanceof z.ZodError) {
-        toast.error(error.errors[0].message);
-      }
-    } finally {
-      setIsLoading(false);
-    }
   };
 
   if (authStep === "otp") {
@@ -193,84 +145,40 @@ export default function Auth() {
           </div>
           <CardTitle className="text-2xl">CFI-POS Techiez</CardTitle>
           <CardDescription>
-            Manage your wholesale business efficiently
+            Sign in to access your point of sale terminal and inventory
           </CardDescription>
         </CardHeader>
-        <CardContent>
-          <Tabs
-            value={authStep}
-            onValueChange={(val) => setAuthStep(val as any)}
-            className="w-full"
-          >
-            <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="login">Login</TabsTrigger>
-              <TabsTrigger value="signup">Sign Up</TabsTrigger>
-            </TabsList>
-            <TabsContent value="login">
-              <form onSubmit={handleLogin} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="login-email">Email</Label>
-                  <Input
-                    id="login-email"
-                    name="email"
-                    type="email"
-                    placeholder="admin@example.com"
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="login-password">Password</Label>
-                  <Input
-                    id="login-password"
-                    name="password"
-                    type="password"
-                    placeholder="••••••••"
-                    required
-                  />
-                </div>
-                <Button type="submit" className="w-full" disabled={isLoading}>
-                  {isLoading ? "Logging in..." : "Login"}
-                </Button>
-              </form>
-            </TabsContent>
-            <TabsContent value="signup">
-              <form onSubmit={handleSignup} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="signup-fullName">Full Name</Label>
-                  <Input
-                    id="signup-fullName"
-                    name="fullName"
-                    type="text"
-                    placeholder="John Doe"
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="signup-email">Email</Label>
-                  <Input
-                    id="signup-email"
-                    name="email"
-                    type="email"
-                    placeholder="you@example.com"
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="signup-password">Password</Label>
-                  <Input
-                    id="signup-password"
-                    name="password"
-                    type="password"
-                    placeholder="••••••••"
-                    required
-                  />
-                </div>
-                <Button type="submit" className="w-full" disabled={isLoading}>
-                  {isLoading ? "Creating account..." : "Sign Up"}
-                </Button>
-              </form>
-            </TabsContent>
-          </Tabs>
+        <CardContent className="space-y-6">
+          <form onSubmit={handleLogin} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="login-email">Email Address</Label>
+              <Input
+                id="login-email"
+                name="email"
+                type="email"
+                placeholder="cashier@store.com"
+                required
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="login-password">Password</Label>
+              <Input
+                id="login-password"
+                name="password"
+                type="password"
+                placeholder="••••••••"
+                required
+              />
+            </div>
+            <Button type="submit" className="w-full" disabled={isLoading}>
+              {isLoading ? "Signing in..." : "Sign In"}
+            </Button>
+          </form>
+
+          <div className="rounded-lg bg-muted/50 p-3 border border-border text-center text-xs text-muted-foreground">
+            <p className="font-medium text-foreground mb-0.5">Need an account or password reset?</p>
+            <p>Staff and cashier accounts are provisioned by your system administrator. Contact your manager or supervisor for credentials.</p>
+          </div>
         </CardContent>
       </Card>
     </div>

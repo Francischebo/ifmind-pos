@@ -1,6 +1,38 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.74.0";
 
+interface DailySalesSummary {
+  total: number;
+  count: number;
+}
+
+interface ProductSalesSummary {
+  name: string;
+  sku: string;
+  currentStock: number;
+  reorderLevel: number;
+  totalSold: number;
+  revenue: number;
+  salesCount: number;
+}
+
+interface ProductSalesRow {
+  product_id: string;
+  quantity: number;
+  line_total: number;
+  products: {
+    name: string;
+    sku: string;
+    stock_on_hand: number;
+    reorder_level: number;
+  } | Array<{
+    name: string;
+    sku: string;
+    stock_on_hand: number;
+    reorder_level: number;
+  }> | null;
+}
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -42,7 +74,7 @@ serve(async (req) => {
       .select('id, name, sku, stock_on_hand, reorder_level, unit_cost');
 
     // Prepare data summary for AI
-    const dailySales = salesData?.reduce((acc: any, sale) => {
+    const dailySales = salesData?.reduce<Record<string, DailySalesSummary>>((acc, sale: { created_at: string; total_amount: number }) => {
       const date = new Date(sale.created_at).toISOString().split('T')[0];
       if (!acc[date]) acc[date] = { total: 0, count: 0 };
       acc[date].total += Number(sale.total_amount);
@@ -50,7 +82,7 @@ serve(async (req) => {
       return acc;
     }, {});
 
-    const productSummary = productSales?.reduce((acc: any, item: any) => {
+    const productSummary = productSales?.reduce<Record<string, ProductSalesSummary>>((acc, item: ProductSalesRow) => {
       const pid = item.product_id;
       const product = Array.isArray(item.products) ? item.products[0] : item.products;
       if (!acc[pid]) {

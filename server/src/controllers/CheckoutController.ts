@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { AuthenticatedRequest } from "../middleware/auth";
 import { randomUUID } from "node:crypto";
 import { AppDataSource } from "../data-source";
 import { PaymentCheckoutItem, PaymentCheckoutSession } from "../entity/PaymentCheckoutSession";
@@ -69,7 +70,7 @@ const sanitizeCheckoutPayload = (input: unknown) => {
 };
 
 export class CheckoutController {
-    static async reserve(req: any, res: Response) {
+    static async reserve(req: AuthenticatedRequest, res: Response) {
         const queryRunner = AppDataSource.createQueryRunner();
         await queryRunner.connect();
         await queryRunner.startTransaction();
@@ -77,7 +78,7 @@ export class CheckoutController {
             if (!req.user?.id) throw new Error("Authenticated cashier is required");
             const payload = sanitizeCheckoutPayload(req.body);
             const shift = await queryRunner.manager.findOneBy(Shift, {
-                cashier_id: req.user.id,
+                cashier_id: req.user!.id,
                 status: ShiftStatus.OPEN,
             });
             if (!shift) throw new Error("Open a shift before reserving stock for checkout");
@@ -91,7 +92,7 @@ export class CheckoutController {
                     existing.items.every((item, index) =>
                         item.product_id === payload.items[index].product_id &&
                         item.quantity === payload.items[index].quantity);
-                if (existing.cashier_id !== req.user.id || existing.status !== "reserved" ||
+                if (existing.cashier_id !== req.user!.id || existing.status !== "reserved" ||
                     !sameItems || existing.warehouse_id !== payload.warehouse_id ||
                     existing.customer_id !== payload.customer_id ||
                     existing.store_credit_barcode !== payload.store_credit_barcode ||
@@ -175,7 +176,7 @@ export class CheckoutController {
             if (payload.loyalty_discount > subtotal) throw new Error("Discount exceeds checkout subtotal");
             const session = queryRunner.manager.create(PaymentCheckoutSession, {
                 id: payload.id || randomUUID(),
-                cashier_id: req.user.id,
+                cashier_id: req.user!.id,
                 warehouse_id: payload.warehouse_id,
                 customer_id: payload.customer_id,
                 store_credit_barcode: payload.store_credit_barcode,
@@ -203,7 +204,7 @@ export class CheckoutController {
         }
     }
 
-    static async get(req: any, res: Response) {
+    static async get(req: AuthenticatedRequest, res: Response) {
         try {
             const sessionId = String(req.params.checkoutSessionId || "");
             const session = await AppDataSource.getRepository(PaymentCheckoutSession).findOneBy({ id: sessionId });
@@ -217,7 +218,7 @@ export class CheckoutController {
             });
             return res.json({
                 ...session,
-                mpesa_transactions: transactions.map((transaction: any) => ({
+                mpesa_transactions: transactions.map((transaction) => ({
                     id: transaction.id,
                     status: transaction.status,
                     amount: Number(transaction.amount),
@@ -232,7 +233,7 @@ export class CheckoutController {
         }
     }
 
-    static async cancel(req: any, res: Response) {
+    static async cancel(req: AuthenticatedRequest, res: Response) {
         const queryRunner = AppDataSource.createQueryRunner();
         await queryRunner.connect();
         await queryRunner.startTransaction();

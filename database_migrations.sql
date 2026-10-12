@@ -2154,9 +2154,9 @@ $$;
 -- Function to validate and create sale server-side
 CREATE OR REPLACE FUNCTION public.create_secure_sale(
   p_cashier_id UUID,
-  p_customer_id UUID DEFAULT NULL,
   p_payment_method TEXT,
   p_items JSONB,
+  p_customer_id UUID DEFAULT NULL,
   p_loyalty_discount DECIMAL DEFAULT 0,
   p_idempotency_key TEXT DEFAULT NULL
 )
@@ -3888,3 +3888,130 @@ GRANT EXECUTE ON FUNCTION public.log_pwa_security_event(TEXT, TEXT, TEXT, TEXT, 
 GRANT EXECUTE ON FUNCTION public.validate_pwa_cache_integrity(JSONB) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.secure_offline_transaction(JSONB, UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.process_offline_transactions() TO authenticated;
+
+-- Keep the legacy aggregate safe if an operator executes it on a new database.
+DO $$
+DECLARE
+  v_function RECORD;
+  v_role RECORD;
+BEGIN
+  FOR v_function IN
+    SELECT p.oid::regprocedure AS signature
+    FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public'
+      AND p.proname = 'create_secure_sale'
+  LOOP
+    EXECUTE format(
+      'REVOKE ALL ON FUNCTION %s FROM PUBLIC',
+      v_function.signature
+    );
+
+    FOR v_role IN
+      SELECT rolname
+      FROM pg_roles
+      WHERE rolname IN ('anon', 'authenticated', 'service_role')
+    LOOP
+      EXECUTE format(
+        'REVOKE ALL ON FUNCTION %s FROM %I',
+        v_function.signature,
+        v_role.rolname
+      );
+    END LOOP;
+  END LOOP;
+END;
+$$;
+
+-- Remove legacy permissive policies and make access explicit for staff roles.
+ALTER TABLE public.customers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.vendors ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.settings ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Anyone can view customers" ON public.customers;
+DROP POLICY IF EXISTS "Only admins and cashiers can view customers" ON public.customers;
+DROP POLICY IF EXISTS "Authenticated admins and cashiers can view customers" ON public.customers;
+DROP POLICY IF EXISTS "Admins and cashiers can manage customers" ON public.customers;
+DROP POLICY IF EXISTS "Authenticated admins and cashiers can manage customers" ON public.customers;
+DROP POLICY IF EXISTS "Staff can view customers" ON public.customers;
+DROP POLICY IF EXISTS "Staff can manage customers" ON public.customers;
+
+CREATE POLICY "Staff can view customers"
+ON public.customers
+FOR SELECT
+TO authenticated
+USING (
+  auth.uid() IS NOT NULL
+  AND (
+    public.has_role(auth.uid(), 'admin'::public.app_role)
+    OR public.has_role(auth.uid(), 'cashier'::public.app_role)
+  )
+);
+
+CREATE POLICY "Staff can manage customers"
+ON public.customers
+FOR ALL
+TO authenticated
+USING (
+  auth.uid() IS NOT NULL
+  AND (
+    public.has_role(auth.uid(), 'admin'::public.app_role)
+    OR public.has_role(auth.uid(), 'cashier'::public.app_role)
+  )
+)
+WITH CHECK (
+  auth.uid() IS NOT NULL
+  AND (
+    public.has_role(auth.uid(), 'admin'::public.app_role)
+    OR public.has_role(auth.uid(), 'cashier'::public.app_role)
+  )
+);
+
+DROP POLICY IF EXISTS "Anyone can view vendors" ON public.vendors;
+DROP POLICY IF EXISTS "Only admins can view vendors" ON public.vendors;
+DROP POLICY IF EXISTS "Admins can manage vendors" ON public.vendors;
+DROP POLICY IF EXISTS "Admins can view vendors" ON public.vendors;
+
+CREATE POLICY "Admins can view vendors"
+ON public.vendors
+FOR SELECT
+TO authenticated
+USING (
+  auth.uid() IS NOT NULL
+  AND public.has_role(auth.uid(), 'admin'::public.app_role)
+);
+
+CREATE POLICY "Admins can manage vendors"
+ON public.vendors
+FOR ALL
+TO authenticated
+USING (
+  auth.uid() IS NOT NULL
+  AND public.has_role(auth.uid(), 'admin'::public.app_role)
+);
+
+DROP POLICY IF EXISTS "Anyone can view settings" ON public.settings;
+DROP POLICY IF EXISTS "Authenticated users can view settings" ON public.settings;
+DROP POLICY IF EXISTS "Admins can manage settings" ON public.settings;
+DROP POLICY IF EXISTS "Admins can view settings" ON public.settings;
+
+CREATE POLICY "Admins can view settings"
+ON public.settings
+FOR SELECT
+TO authenticated
+USING (
+  auth.uid() IS NOT NULL
+  AND public.has_role(auth.uid(), 'admin'::public.app_role)
+);
+
+CREATE POLICY "Admins can manage settings"
+ON public.settings
+FOR ALL
+TO authenticated
+USING (
+  auth.uid() IS NOT NULL
+  AND public.has_role(auth.uid(), 'admin'::public.app_role)
+);
+
+-- Defense in depth: anonymous requests should not have table privileges at all.
+REVOKE ALL ON TABLE public.customers, public.vendors, public.settings FROM anon;
+

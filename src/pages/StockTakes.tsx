@@ -28,7 +28,7 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { useAuth } from "@/hooks/useAuth";
+import { useAuth } from "@/hooks/useAuthContext";
 import { Plus, Play, CheckCircle } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -89,7 +89,7 @@ export default function StockTakes() {
       ]);
       setStockTakes(stRes || []);
       setWarehouses(whRes || []);
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message || "Failed to load stock takes");
     }
   };
@@ -102,7 +102,7 @@ export default function StockTakes() {
       setDialogOpen(false);
       setFormData({ warehouse_id: "", notes: "" });
       loadData();
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message || "Failed to initiate stock take");
     }
   };
@@ -139,7 +139,7 @@ export default function StockTakes() {
       });
       toast.success("Progress saved");
       loadData();
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message || "Failed to save progress");
     } finally {
       setSavingCounts(false);
@@ -160,7 +160,7 @@ export default function StockTakes() {
       toast.success("Progress saved");
       setActiveTake(null);
       await loadData();
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message || "Failed to save progress");
     } finally {
       setSavingCounts(false);
@@ -194,14 +194,14 @@ export default function StockTakes() {
       toast.success("Stock Take completed and stock adjusted");
       setActiveTake(null);
       loadData();
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message || "Failed to complete stock take");
     } finally {
       setSavingCounts(false);
     }
   };
 
-  const getStatusBadge = (status: string) => {
+  const getStatusBadge = (status: string): React.ComponentProps<typeof Badge>["variant"] => {
     switch (status) {
       case "completed":
         return "default";
@@ -430,7 +430,7 @@ export default function StockTakes() {
                       {take.warehouse?.name}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={getStatusBadge(take.status) as any}>
+                      <Badge variant={getStatusBadge(take.status)}>
                         {take.status.replace("_", " ")}
                       </Badge>
                     </TableCell>

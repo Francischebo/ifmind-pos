@@ -74,14 +74,25 @@ const handler = async (req: Request): Promise<Response> => {
       .from('products')
       .select('*', { count: 'exact', head: true });
 
+    const escapeHtml = (str: unknown): string => {
+      if (typeof str !== "string") return "";
+      return str.replace(/[&<>'"]/g, (tag) => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        "'": '&#39;',
+        '"': '&quot;',
+      }[tag] || tag));
+    };
+
     // Generate report HTML
     const lowStockHtml = lowStockProducts.length > 0 
       ? lowStockProducts.map(p => `
         <tr>
-          <td style="padding: 8px; border: 1px solid #e5e7eb;">${p.name}</td>
-          <td style="padding: 8px; border: 1px solid #e5e7eb;">${p.sku}</td>
-          <td style="padding: 8px; border: 1px solid #e5e7eb; text-align: center;">${p.stock_on_hand}</td>
-          <td style="padding: 8px; border: 1px solid #e5e7eb; text-align: center;">${p.reorder_level}</td>
+          <td style="padding: 8px; border: 1px solid #e5e7eb;">${escapeHtml(p.name)}</td>
+          <td style="padding: 8px; border: 1px solid #e5e7eb;">${escapeHtml(p.sku)}</td>
+          <td style="padding: 8px; border: 1px solid #e5e7eb; text-align: center;">${Number(p.stock_on_hand) || 0}</td>
+          <td style="padding: 8px; border: 1px solid #e5e7eb; text-align: center;">${Number(p.reorder_level) || 0}</td>
         </tr>
       `).join('')
       : '<tr><td colspan="4" style="padding: 8px; text-align: center;">No low stock items</td></tr>';
@@ -173,7 +184,7 @@ const handler = async (req: Request): Promise<Response> => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       }
     );
-  } catch (error: any) {
+  } catch (error) {
     console.error("Error in send-scheduled-reports:", error);
     return new Response(
       JSON.stringify({ error: error.message }),

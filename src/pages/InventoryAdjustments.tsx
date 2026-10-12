@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { useAuth } from '@/hooks/useAuth';
+import { useAuth } from '@/hooks/useAuthContext';
 import { Plus } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 
@@ -70,7 +70,7 @@ export default function InventoryAdjustments() {
       setAdjustments(adjRes || []);
       setProducts(prodRes || []);
       setWarehouses(whRes || []);
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message || 'Failed to load adjustments');
     }
   };
@@ -95,12 +95,12 @@ export default function InventoryAdjustments() {
         reason: '',
       });
       loadData();
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message || 'Failed to create adjustment');
     }
   };
 
-  const getBadgeVariant = (type: string) => {
+  const getBadgeVariant = (type: string): React.ComponentProps<typeof Badge>["variant"] => {
     switch(type) {
       case 'shrinkage': return 'destructive';
       case 'damage': return 'destructive';
@@ -223,7 +223,7 @@ export default function InventoryAdjustments() {
                   </TableCell>
                   <TableCell>{adj.warehouse?.name}</TableCell>
                   <TableCell>
-                    <Badge variant={getBadgeVariant(adj.type) as any}>{adj.type}</Badge>
+                    <Badge variant={getBadgeVariant(adj.type)}>{adj.type}</Badge>
                   </TableCell>
                   <TableCell className={adj.quantity_adjusted < 0 ? 'text-destructive font-bold' : 'text-green-600 font-bold'}>
                     {adj.quantity_adjusted > 0 ? '+' : ''}{adj.quantity_adjusted}

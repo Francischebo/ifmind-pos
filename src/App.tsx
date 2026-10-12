@@ -60,9 +60,9 @@ const App = () => {
         <Toaster />
         <Sonner />
         <PWAInstallPrompt />
-        <OfflineIndicator />
         <BrowserRouter>
           <AuthProvider>
+            <OfflineIndicator />
             <Suspense
               fallback={
                 <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">
@@ -91,11 +91,19 @@ const App = () => {
                                 />
                                 <Route
                                   path="/products"
-                                  element={<Products />}
+                                  element={
+                                    <ProtectedRoute allowedRoles={["admin"]}>
+                                      <Products />
+                                    </ProtectedRoute>
+                                  }
                                 />
                                 <Route
                                   path="/products/new"
-                                  element={<NewProduct />}
+                                  element={
+                                    <ProtectedRoute allowedRoles={["admin"]}>
+                                      <NewProduct />
+                                    </ProtectedRoute>
+                                  }
                                 />
                                 <Route path="/sales" element={<Sales />} />
                                 <Route
@@ -106,38 +114,77 @@ const App = () => {
                                   path="/customers"
                                   element={<Customers />}
                                 />
-                                <Route path="/vendors" element={<Vendors />} />
+                                <Route
+                                  path="/vendors"
+                                  element={
+                                    <ProtectedRoute allowedRoles={["admin"]}>
+                                      <Vendors />
+                                    </ProtectedRoute>
+                                  }
+                                />
                                 <Route
                                   path="/purchase-orders"
-                                  element={<PurchaseOrders />}
+                                  element={
+                                    <ProtectedRoute allowedRoles={["admin"]}>
+                                      <PurchaseOrders />
+                                    </ProtectedRoute>
+                                  }
                                 />
                                 <Route
                                   path="/purchase-orders/new"
-                                  element={<NewPurchaseOrder />}
+                                  element={
+                                    <ProtectedRoute allowedRoles={["admin"]}>
+                                      <NewPurchaseOrder />
+                                    </ProtectedRoute>
+                                  }
                                 />
                                 <Route
                                   path="/purchase-orders/:id/receive"
-                                  element={<ReceivePurchaseOrder />}
+                                  element={
+                                    <ProtectedRoute allowedRoles={["admin"]}>
+                                      <ReceivePurchaseOrder />
+                                    </ProtectedRoute>
+                                  }
                                 />
                                 <Route
                                   path="/delivery-notes"
-                                  element={<DeliveryNotes />}
+                                  element={
+                                    <ProtectedRoute allowedRoles={["admin"]}>
+                                      <DeliveryNotes />
+                                    </ProtectedRoute>
+                                  }
                                 />
                                 <Route
                                   path="/supplier-invoices"
-                                  element={<SupplierInvoices />}
+                                  element={
+                                    <ProtectedRoute allowedRoles={["admin"]}>
+                                      <SupplierInvoices />
+                                    </ProtectedRoute>
+                                  }
                                 />
                                 <Route
                                   path="/stock-movements"
-                                  element={<StockMovements />}
+                                  element={
+                                    <ProtectedRoute allowedRoles={["admin"]}>
+                                      <StockMovements />
+                                    </ProtectedRoute>
+                                  }
                                 />
                                 <Route
                                   path="/inventory-operations"
-                                  element={<InventoryOperations />}
+                                  element={
+                                    <ProtectedRoute allowedRoles={["admin"]}>
+                                      <InventoryOperations />
+                                    </ProtectedRoute>
+                                  }
                                 />
                                 <Route
                                   path="/accounts-receivable"
-                                  element={<AccountsReceivable />}
+                                  element={
+                                    <ProtectedRoute allowedRoles={["admin"]}>
+                                      <AccountsReceivable />
+                                    </ProtectedRoute>
+                                  }
                                 />
                                 <Route
                                   path="/mobile-cashier"
@@ -145,33 +192,71 @@ const App = () => {
                                 />
                                 <Route
                                   path="/locations"
-                                  element={<Locations />}
+                                  element={
+                                    <ProtectedRoute allowedRoles={["admin"]}>
+                                      <Locations />
+                                    </ProtectedRoute>
+                                  }
                                 />
                                 <Route
                                   path="/inventory-transfers"
-                                  element={<InventoryTransfers />}
+                                  element={
+                                    <ProtectedRoute allowedRoles={["admin", "manager", "supervisor"]}>
+                                      <InventoryTransfers />
+                                    </ProtectedRoute>
+                                  }
                                 />
                                 <Route
                                   path="/inventory-adjustments"
-                                  element={<InventoryAdjustments />}
+                                  element={
+                                    <ProtectedRoute allowedRoles={["admin", "manager", "supervisor"]}>
+                                      <InventoryAdjustments />
+                                    </ProtectedRoute>
+                                  }
                                 />
                                 <Route
                                   path="/stock-takes"
-                                  element={<StockTakes />}
+                                  element={
+                                    <ProtectedRoute allowedRoles={["admin", "manager", "supervisor"]}>
+                                      <StockTakes />
+                                    </ProtectedRoute>
+                                  }
                                 />
                                 <Route
                                   path="/vendor-portal"
-                                  element={<VendorPortal />}
+                                  element={
+                                    <ProtectedRoute allowedRoles={["admin"]}>
+                                      <VendorPortal />
+                                    </ProtectedRoute>
+                                  }
                                 />
-                                <Route path="/reports" element={<Reports />} />
+                                <Route
+                                  path="/reports"
+                                  element={
+                                    <ProtectedRoute allowedRoles={["admin"]}>
+                                      <Reports />
+                                    </ProtectedRoute>
+                                  }
+                                />
                                 <Route path="/returns" element={<Returns />} />
                                 <Route path="/shifts" element={<Shifts />} />
                                 <Route path="/loyalty" element={<Loyalty />} />
                                 <Route
                                   path="/settings"
-                                  element={<Settings />}
+                                  element={
+                                    <ProtectedRoute allowedRoles={["admin"]}>
+                                      <Settings />
+                                    </ProtectedRoute>
+                                  }
                                 />
-                                <Route path="/users" element={<Users />} />
+                                <Route
+                                  path="/users"
+                                  element={
+                                    <ProtectedRoute allowedRoles={["admin"]}>
+                                      <Users />
+                                    </ProtectedRoute>
+                                  }
+                                />
                                 <Route path="*" element={<NotFound />} />
                                 </Routes>
                               </div>

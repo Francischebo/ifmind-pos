@@ -12,7 +12,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { toast } from "sonner";
-import { useAuth } from "@/hooks/useAuth";
+import { useAuth } from "@/hooks/useAuthContext";
 import {
   Dialog,
   DialogContent,
@@ -67,6 +67,14 @@ export default function Users() {
   const [editForm, setEditForm] = useState({ full_name: "", email: "" });
   const [isDeleting, setIsDeleting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isAddUserOpen, setIsAddUserOpen] = useState(false);
+  const [isCreatingUser, setIsCreatingUser] = useState(false);
+  const [addUserForm, setAddUserForm] = useState({
+    full_name: "",
+    email: "",
+    password: "",
+    role: "cashier",
+  });
 
   useEffect(() => {
     loadUsers();
@@ -77,7 +85,7 @@ export default function Users() {
       setLoading(true);
       const usersData = await ApiService.get<UserWithRole[]>("/users");
       setUsers(usersData || []);
-    } catch (error: any) {
+    } catch (error) {
       console.error("Error loading users:", error);
       toast.error(error.message || "Failed to load users");
     } finally {
@@ -99,7 +107,7 @@ export default function Users() {
       await ApiService.put(`/users/${userId}/role`, { role: newRole });
       toast.success("Role updated successfully");
       loadUsers();
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message);
     }
   };
@@ -122,7 +130,7 @@ export default function Users() {
       toast.success("User details updated successfully");
       setEditingUser(null);
       await loadUsers();
-    } catch (error: any) {
+    } catch (error) {
       console.error("Error updating user:", error);
       toast.error(error.message || "Failed to update user");
     } finally {
@@ -140,7 +148,7 @@ export default function Users() {
       toast.success("User deleted successfully");
       setDeleteUserId(null);
       await loadUsers();
-    } catch (error: any) {
+    } catch (error) {
       console.error("Error deleting user:", error);
       toast.error(error.message || "Failed to delete user");
     } finally {
@@ -153,8 +161,41 @@ export default function Users() {
       toast.info(
         "Password reset is handled by the authenticated auth flow on the server.",
       );
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message);
+    }
+  };
+
+  const handleCreateUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!addUserForm.full_name.trim() || !addUserForm.email.trim() || !addUserForm.password) {
+      toast.error("Please fill in all required fields");
+      return;
+    }
+
+    if (addUserForm.password.length < 8) {
+      toast.error("Password must be at least 8 characters long");
+      return;
+    }
+
+    try {
+      setIsCreatingUser(true);
+      await ApiService.post("/users", {
+        full_name: addUserForm.full_name.trim(),
+        email: addUserForm.email.trim(),
+        password: addUserForm.password,
+        role: addUserForm.role,
+      });
+
+      toast.success("User account created successfully");
+      setIsAddUserOpen(false);
+      setAddUserForm({ full_name: "", email: "", password: "", role: "cashier" });
+      await loadUsers();
+    } catch (error) {
+      console.error("Error creating user:", error);
+      toast.error(error.message || "Failed to create user");
+    } finally {
+      setIsCreatingUser(false);
     }
   };
 
@@ -172,6 +213,15 @@ export default function Users() {
             Manage user roles and permissions
           </p>
         </div>
+        {isAdmin && (
+          <Button
+            onClick={() => setIsAddUserOpen(true)}
+            className="flex items-center gap-2"
+          >
+            <UserPlus className="h-4 w-4" />
+            Add Staff Member
+          </Button>
+        )}
       </div>
 
       <Card>
@@ -406,6 +456,96 @@ export default function Users() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Add User Dialog */}
+      <Dialog
+        open={isAddUserOpen}
+        onOpenChange={(open) => !open && setIsAddUserOpen(false)}
+      >
+        <DialogContent>
+          <form onSubmit={handleCreateUser}>
+            <DialogHeader>
+              <DialogTitle>Add Staff Member</DialogTitle>
+              <DialogDescription>
+                Provision a new user account with role-based access control.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="add_full_name">Full Name *</Label>
+                <Input
+                  id="add_full_name"
+                  placeholder="e.g. Jane Doe"
+                  value={addUserForm.full_name}
+                  onChange={(e) =>
+                    setAddUserForm({ ...addUserForm, full_name: e.target.value })
+                  }
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="add_email">Email Address *</Label>
+                <Input
+                  id="add_email"
+                  type="email"
+                  placeholder="e.g. cashier@store.com"
+                  value={addUserForm.email}
+                  onChange={(e) =>
+                    setAddUserForm({ ...addUserForm, email: e.target.value })
+                  }
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="add_password">Initial Password * (min 8 characters)</Label>
+                <Input
+                  id="add_password"
+                  type="password"
+                  placeholder="••••••••"
+                  value={addUserForm.password}
+                  onChange={(e) =>
+                    setAddUserForm({ ...addUserForm, password: e.target.value })
+                  }
+                  required
+                  minLength={8}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="add_role">Assigned Role *</Label>
+                <Select
+                  value={addUserForm.role}
+                  onValueChange={(val) =>
+                    setAddUserForm({ ...addUserForm, role: val })
+                  }
+                >
+                  <SelectTrigger id="add_role">
+                    <SelectValue placeholder="Select role" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="cashier">Cashier</SelectItem>
+                    <SelectItem value="supervisor">Supervisor</SelectItem>
+                    <SelectItem value="manager">Manager</SelectItem>
+                    <SelectItem value="admin">Administrator</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setIsAddUserOpen(false)}
+                disabled={isCreatingUser}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={isCreatingUser}>
+                {isCreatingUser ? "Creating..." : "Create Account"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { useAuth } from '@/hooks/useAuth';
+import { useAuth } from '@/hooks/useAuthContext';
 import { Plus, ArrowRight, CheckCircle } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 
@@ -66,7 +66,7 @@ export default function InventoryTransfers() {
       setTransfers(transfersRes || []);
       setWarehouses(warehousesRes || []);
       setProducts(productsRes || []);
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message || 'Failed to load transfer data');
     }
   };
@@ -84,7 +84,7 @@ export default function InventoryTransfers() {
       toast.success('Transfer created');
       resetForm();
       loadData();
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message || 'Failed to create transfer');
     }
   };
@@ -108,7 +108,7 @@ export default function InventoryTransfers() {
       });
       toast.success('Transfer completed');
       loadData();
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message || 'Failed to complete transfer');
     }
   };

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useCallback, useState, useEffect, useRef } from "react";
 import { ApiService } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,7 +13,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { useAuth } from "@/hooks/useAuth";
+import { useAuth } from "@/hooks/useAuthContext";
 import { Plus, MapPin, Trash2, Edit } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
 
@@ -24,6 +24,9 @@ interface Warehouse {
   is_main: boolean;
   is_active: boolean;
 }
+
+const getErrorMessage = (error: unknown, fallback: string) =>
+  error instanceof Error ? error.message : fallback;
 
 export default function Locations() {
   const { role } = useAuth();
@@ -43,17 +46,7 @@ export default function Locations() {
 
   const isAdmin = role === "admin";
 
-  useEffect(() => {
-    isMounted.current = true;
-    void loadLocations();
-
-    return () => {
-      isMounted.current = false;
-      if (retryTimer.current) clearTimeout(retryTimer.current);
-    };
-  }, []);
-
-  const loadLocations = async () => {
+  const loadLocations = useCallback(async () => {
     if (retryTimer.current) {
       clearTimeout(retryTimer.current);
       retryTimer.current = null;
@@ -72,18 +65,28 @@ export default function Locations() {
       setLocations(data);
       setLoadError(false);
       hasShownLoadError.current = false;
-    } catch (error: any) {
+    } catch (error) {
       if (!isMounted.current) return;
       setLoadError(true);
       if (!hasShownLoadError.current) {
-        toast.error(error.message || "Failed to load locations");
+        toast.error(getErrorMessage(error, "Failed to load locations"));
         hasShownLoadError.current = true;
       }
       retryTimer.current = setTimeout(() => void loadLocations(), 5000);
     } finally {
       if (isMounted.current) setIsLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    isMounted.current = true;
+    void loadLocations();
+
+    return () => {
+      isMounted.current = false;
+      if (retryTimer.current) clearTimeout(retryTimer.current);
+    };
+  }, [loadLocations]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -98,8 +101,8 @@ export default function Locations() {
       }
       resetForm();
       loadLocations();
-    } catch (error: any) {
-      toast.error(error.message || "Error saving location");
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Error saving location"));
     }
   };
 
@@ -126,8 +129,8 @@ export default function Locations() {
       await ApiService.delete(`/warehouses/${id}`);
       toast.success("Location deactivated");
       loadLocations();
-    } catch (error: any) {
-      toast.error(error.message || "Error deactivating location");
+    } catch (error) {
+      toast.error(getErrorMessage(error, "Error deactivating location"));
     }
   };
 

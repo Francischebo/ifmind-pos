@@ -14,12 +14,16 @@ dist-ssr
 playwright-report/
 test-results/
 
-# Environment variables
+# Environment variables (ignore all .env files in root and subdirectories)
 .env
-.env.example
-.env.local
-.env.production
-.env.staging
+.env.*
+*.env
+*.env.*
+**/.env
+**/.env.*
+!.env.example
+!server/.env.example
+!docker-compose.env.example
 .vercel
 
 # Editor directories and files

@@ -10,7 +10,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toast } from "sonner";
-import { useAuth } from "@/hooks/useAuth";
+import { useAuth } from "@/hooks/useAuthContext";
 import { ApiService } from "@/lib/api";
 import { Package, FileText, MessageSquare } from "lucide-react";
 
@@ -33,6 +33,19 @@ interface Invoice {
   po_id: string;
 }
 
+interface VendorPortalResponse {
+  purchaseOrders: PurchaseOrder[];
+  invoices: Array<{
+    id: string;
+    invoice_number: string;
+    invoice_date: string;
+    due_date: string | null;
+    total_amount: number;
+    status: string;
+    po_id: string;
+  }>;
+}
+
 export default function VendorPortal() {
   const { user } = useAuth();
   const [orders, setOrders] = useState<PurchaseOrder[]>([]);
@@ -44,10 +57,10 @@ export default function VendorPortal() {
 
   const loadVendorData = async () => {
     try {
-      const data = await ApiService.get<any>("/vendor-portal");
+      const data = await ApiService.get<VendorPortalResponse>("/vendor-portal");
       setOrders(data.purchaseOrders || []);
       setInvoices(
-        (data.invoices || []).map((invoice: any) => ({
+        (data.invoices || []).map((invoice) => ({
           id: invoice.id,
           invoice_number: invoice.invoice_number,
           invoice_date: invoice.invoice_date,
@@ -57,7 +70,7 @@ export default function VendorPortal() {
           po_id: invoice.po_id,
         })),
       );
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message || "Failed to load supplier portal data");
     }
   };

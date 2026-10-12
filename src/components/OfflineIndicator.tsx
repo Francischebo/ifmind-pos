@@ -1,18 +1,18 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { Wifi, WifiOff } from "lucide-react";
+import { Loader2, RefreshCw, Wifi, WifiOff } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { useOfflineQueue } from "@/hooks/useOfflineQueue";
+import { useOfflineQueue } from "@/hooks/useOfflineQueueContext";
 
 export const OfflineIndicator = () => {
-  const { isOnline, isSyncing } = useOfflineQueue();
-  const [showAlert, setShowAlert] = useState(!navigator.onLine);
+  const { isOnline, isSyncing, queueLength, conflictCount, syncError, syncQueue } = useOfflineQueue();
+  const [showAlert, setShowAlert] = useState(() => !navigator.onLine);
   const wasOnline = useRef(isOnline);
 
   useEffect(() => {
-    if (!isOnline) {
+    if (!isOnline || queueLength > 0) {
       setShowAlert(true);
-    } else if (!wasOnline.current) {
+    } else if (!wasOnline.current || showAlert) {
       setShowAlert(true);
       const timeout = window.setTimeout(() => setShowAlert(false), 4000);
       wasOnline.current = true;
@@ -20,13 +20,13 @@ export const OfflineIndicator = () => {
     }
 
     wasOnline.current = isOnline;
-  }, [isOnline]);
+  }, [isOnline, queueLength, showAlert]);
 
   const handleDismiss = useCallback(() => {
-    if (isOnline) {
+    if (isOnline && queueLength === 0) {
       setShowAlert(false);
     }
-  }, [isOnline]);
+  }, [isOnline, queueLength]);
 
   if (!showAlert) return null;
 
@@ -50,10 +50,28 @@ export const OfflineIndicator = () => {
           }`}
         >
           {isOnline
-            ? "Back online - server operations available"
-            : "Offline - server operations unavailable"}
+            ? conflictCount > 0
+              ? `${conflictCount} offline sale(s) need review`
+              : isSyncing
+                ? "Reconnecting and syncing offline sales…"
+                : queueLength > 0
+                  ? `${queueLength} offline sale(s) awaiting sync`
+                  : "Back online - server operations available"
+            : "Server unavailable - offline POS mode"}
         </AlertDescription>
-        {isOnline && !isSyncing && (
+        {isOnline && queueLength > 0 && !isSyncing && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void syncQueue()}
+            className="pointer-events-auto"
+          >
+            <RefreshCw className="mr-1 h-3 w-3" />
+            Sync
+          </Button>
+        )}
+        {isSyncing && <Loader2 className="h-4 w-4 animate-spin" />}
+        {isOnline && queueLength === 0 && !isSyncing && (
           <Button
             variant="ghost"
             size="sm"
@@ -66,8 +84,11 @@ export const OfflineIndicator = () => {
       </div>
       {!isOnline && (
         <p className="mt-2 text-xs text-muted-foreground">
-          Reconnect before completing sales or other server-backed changes.
+          Only cached products and provisional walk-in cash sales are available. Other changes need the server.
         </p>
+      )}
+      {syncError && isOnline && (
+        <p className="mt-2 text-xs text-destructive">{syncError}</p>
       )}
     </Alert>
   );

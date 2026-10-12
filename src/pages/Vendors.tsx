@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Plus, Edit, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { useAuth } from "@/hooks/useAuth";
+import { useAuth } from "@/hooks/useAuthContext";
 import {
   Dialog,
   DialogContent,
@@ -64,7 +64,7 @@ export default function Vendors() {
     try {
       const data = await ApiService.get<Vendor[]>("/vendors");
       setVendors(data || []);
-    } catch (e: any) {
+    } catch (e) {
       toast.error("Failed to load suppliers: " + e.message);
     }
   };
@@ -82,7 +82,7 @@ export default function Vendors() {
       setIsDialogOpen(false);
       resetForm();
       loadVendors();
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message);
     }
   };
@@ -119,7 +119,7 @@ export default function Vendors() {
       await ApiService.delete(`/vendors/${vendorToDelete}`);
       toast.success("Supplier deleted");
       loadVendors();
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message || "Failed to delete supplier");
     }
     setVendorToDelete(null);

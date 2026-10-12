@@ -17,7 +17,7 @@ export class EnforceSingleMainWarehouse1790920000000 implements MigrationInterfa
               AND ranked_main_warehouses.position > 1
         `);
         await queryRunner.query(`
-            CREATE UNIQUE INDEX "IDX_warehouses_single_main"
+            CREATE UNIQUE INDEX IF NOT EXISTS "IDX_warehouses_single_main"
             ON "warehouses" ("is_main")
             WHERE "is_main" = true
         `);

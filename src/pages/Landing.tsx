@@ -13,7 +13,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '@/hooks/useAuth';
+import { useAuth } from '@/hooks/useAuthContext';
 import { useEffect } from 'react';
 import cfiLogo from '@/assets/cfi-pos-techiez-logo.png';
 

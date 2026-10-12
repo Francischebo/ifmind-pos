@@ -1,4 +1,6 @@
 import { Request, Response } from "express";
+import { AuthenticatedRequest } from "../middleware/auth";
+import { QueryFailedError } from "typeorm";
 import { AppDataSource } from "../data-source";
 import { PurchaseOrder } from "../entity/PurchaseOrder";
 import { DeliveryNote } from "../entity/DeliveryNote";
@@ -38,12 +40,22 @@ const SUPPLIER_PAYMENT_ALLOWED_FIELDS = new Set([
     "notes",
 ]);
 
-export const sanitizeSupplierInvoicePayload = (input: unknown) => {
+type SupplierInvoicePayload = Partial<Record<
+    "invoice_number" | "vendor_id" | "po_id" | "delivery_note_id" | "due_date" | "invoice_date" | "notes" | "payment_terms",
+    string
+> & Record<"subtotal" | "tax_amount" | "total_amount", number>>;
+
+type SupplierPaymentPayload = Partial<Record<
+    "payment_method" | "reference_number" | "payment_date" | "notes",
+    string
+> & { amount: number }>;
+
+export const sanitizeSupplierInvoicePayload = (input: unknown): SupplierInvoicePayload => {
     if (!input || typeof input !== "object" || Array.isArray(input)) {
-        return {} as Record<string, any>;
+        return {};
     }
 
-    const sanitized: Record<string, any> = {};
+    const sanitized: SupplierInvoicePayload = {};
     for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
         if (!SUPPLIER_INVOICE_ALLOWED_FIELDS.has(key) || value === undefined || value === null) {
             continue;
@@ -52,11 +64,15 @@ export const sanitizeSupplierInvoicePayload = (input: unknown) => {
         if (typeof value === "string") {
             const trimmed = value.trim();
             if (trimmed === "" && (key === "invoice_number" || key === "vendor_id" || key === "po_id")) continue;
-            sanitized[key] = trimmed;
+            if (key === "invoice_number" || key === "vendor_id" || key === "po_id" || key === "delivery_note_id" ||
+                key === "due_date" || key === "invoice_date" || key === "notes" || key === "payment_terms") {
+                sanitized[key] = trimmed;
+            }
             continue;
         }
 
-        if (typeof value === "number" || typeof value === "boolean") {
+        if (typeof value === "number" && Number.isFinite(value) &&
+            (key === "subtotal" || key === "tax_amount" || key === "total_amount")) {
             sanitized[key] = value;
         }
     }
@@ -64,12 +80,12 @@ export const sanitizeSupplierInvoicePayload = (input: unknown) => {
     return sanitized;
 };
 
-export const sanitizeSupplierPaymentPayload = (input: unknown) => {
+export const sanitizeSupplierPaymentPayload = (input: unknown): SupplierPaymentPayload => {
     if (!input || typeof input !== "object" || Array.isArray(input)) {
-        return {} as Record<string, any>;
+        return {};
     }
 
-    const sanitized: Record<string, any> = {};
+    const sanitized: SupplierPaymentPayload = {};
     for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
         if (!SUPPLIER_PAYMENT_ALLOWED_FIELDS.has(key) || value === undefined || value === null) {
             continue;
@@ -78,11 +94,13 @@ export const sanitizeSupplierPaymentPayload = (input: unknown) => {
         if (typeof value === "string") {
             const trimmed = value.trim();
             if (trimmed === "" && (key === "payment_method" || key === "reference_number")) continue;
-            sanitized[key] = trimmed;
+            if (key === "payment_method" || key === "reference_number" || key === "payment_date" || key === "notes") {
+                sanitized[key] = trimmed;
+            }
             continue;
         }
 
-        if (typeof value === "number") {
+        if (typeof value === "number" && Number.isFinite(value) && key === "amount") {
             sanitized[key] = value;
         }
     }
@@ -115,7 +133,7 @@ export class ProcurementController {
             });
 
             return res.json(invoices);
-        } catch (error: any) {
+        } catch (error) {
             console.error("Error fetching supplier invoices:", error);
             return res.status(500).json({ message: "Error fetching supplier invoices" });
         }
@@ -129,7 +147,7 @@ export class ProcurementController {
             });
 
             return res.json(payments);
-        } catch (error: any) {
+        } catch (error) {
             console.error("Error fetching supplier payments:", error);
             return res.status(500).json({ message: "Error fetching supplier payments" });
         }
@@ -138,7 +156,7 @@ export class ProcurementController {
     // -----------------------------------------------------
     // 3-WAY MATCHING (Invoice <- PO -> GRN)
     // -----------------------------------------------------
-    static async createSupplierInvoice(req: any, res: Response) {
+    static async createSupplierInvoice(req: AuthenticatedRequest, res: Response) {
         const queryRunner = AppDataSource.createQueryRunner();
         await queryRunner.connect();
         await queryRunner.startTransaction();
@@ -227,7 +245,7 @@ export class ProcurementController {
             await queryRunner.commitTransaction();
             return res.status(201).json({ message: "Invoice processed", invoice });
 
-        } catch (error: any) {
+        } catch (error) {
             await queryRunner.rollbackTransaction();
             if (error instanceof DuplicateSupplierInvoiceError) {
                 return res.status(409).json({ message: error.message });
@@ -235,16 +253,18 @@ export class ProcurementController {
             if (error instanceof DuplicateDeliveryNoteInvoiceError) {
                 return res.status(409).json({ message: error.message });
             }
-            if (error?.driverError?.code === "23505" && error?.driverError?.constraint === "IDX_supplier_invoice_vendor_number") {
+            if (error instanceof QueryFailedError &&
+                error.driverError.code === "23505" &&
+                error.driverError.constraint === "IDX_supplier_invoice_vendor_number") {
                 return res.status(409).json({ message: "This invoice number already exists for this vendor" });
             }
-            return res.status(400).json({ message: error.message || "Failed to process invoice" });
+            return res.status(400).json({ message: error instanceof Error ? error.message : "Failed to process invoice" });
         } finally {
             await queryRunner.release();
         }
     }
 
-    static async recordSupplierPayment(req: any, res: Response) {
+    static async recordSupplierPayment(req: AuthenticatedRequest, res: Response) {
         const queryRunner = AppDataSource.createQueryRunner();
         await queryRunner.connect();
         await queryRunner.startTransaction();
@@ -312,10 +332,10 @@ export class ProcurementController {
 
             await queryRunner.commitTransaction();
             return res.status(201).json({ message: "Payment recorded", payment, invoice });
-        } catch (error: any) {
+        } catch (error) {
             await queryRunner.rollbackTransaction();
             console.error("Error recording supplier payment:", error);
-            return res.status(500).json({ message: error.message || "Error recording supplier payment" });
+            return res.status(500).json({ message: error instanceof Error ? error.message : "Error recording supplier payment" });
         } finally {
             await queryRunner.release();
         }
@@ -324,9 +344,9 @@ export class ProcurementController {
     // -----------------------------------------------------
     // PURCHASE REQUISITIONS & HIERARCHIES
     // -----------------------------------------------------
-    static async updateRequisitionStatus(req: any, res: Response) {
+    static async updateRequisitionStatus(req: AuthenticatedRequest, res: Response) {
         try {
-            const { id } = req.params;
+            const id = req.params.id;
             const { status } = sanitizeRequisitionStatusPayload(req.body ?? {});
 
             const requisition = await reqRepo.findOne({ where: { id }, relations: ["product", "requester"] });
@@ -334,7 +354,7 @@ export class ProcurementController {
 
             // Ensure hierarchical flow
             if (status === RequisitionStatus.APPROVED || status === RequisitionStatus.REJECTED) {
-                const approver = await AppDataSource.manager.findOneBy(User, { id: req.user.id });
+                const approver = await AppDataSource.manager.findOneBy(User, { id: req.user!.id });
                 if (!approver) return res.status(401).json({ message: "Invalid approver" });
                 requisition.approver = approver;
             }
@@ -343,8 +363,8 @@ export class ProcurementController {
             await reqRepo.save(requisition);
 
             res.json(requisition);
-        } catch(err: any) {
-             res.status(400).json({ message: err.message || "Failed to update requisition" });
+        } catch (err) {
+             res.status(400).json({ message: err instanceof Error ? err.message : "Failed to update requisition" });
         }
     }
 }

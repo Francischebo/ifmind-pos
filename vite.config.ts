@@ -60,6 +60,7 @@ export default defineConfig(({ mode }) => ({
     // Re-enable PWA with security hardening - Windows path issue resolved
     VitePWA({
       registerType: 'autoUpdate',
+      injectRegister: null,
       includeAssets: ['cfi-pos-techiez-mark.png'],
       manifest: {
         name: 'CFI-POS Techiez',
@@ -88,11 +89,8 @@ export default defineConfig(({ mode }) => ({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
-        // Security: Don't cache sensitive endpoints
         navigateFallbackDenylist: [
-          /\/auth/,
-          /\/admin/,
-          /\/api\/.*\/sensitive/
+          /^\/api(?:\/|$)/
         ]
       },
       devOptions: {

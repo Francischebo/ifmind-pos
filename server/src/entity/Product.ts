@@ -18,7 +18,7 @@ export class Product {
 
     @ManyToOne(() => Category, category => category.products)
     @JoinColumn({ name: "category_id" })
-    category: Category;
+    category: Category | null;
 
     @Column("decimal", { precision: 10, scale: 2 })
     unit_cost: number;
@@ -28,7 +28,7 @@ export class Product {
 
     @ManyToOne(() => TaxClass, { nullable: true })
     @JoinColumn({ name: "tax_class_id" })
-    tax_class: TaxClass;
+    tax_class: TaxClass | null;
 
     @Column({ nullable: true })
     tax_class_id: string;
@@ -50,7 +50,7 @@ export class Product {
 
     @ManyToOne(() => Product, { nullable: true })
     @JoinColumn({ name: "parent_id" })
-    parent: Product;
+    parent: Product | null;
 
     @Column({ nullable: true })
     parent_id: string;
@@ -59,7 +59,7 @@ export class Product {
     is_parent: boolean;
 
     @Column("jsonb", { nullable: true })
-    variant_attributes: any;
+    variant_attributes: Record<string, string | number | boolean> | null;
 
     @CreateDateColumn()
     created_at: Date;

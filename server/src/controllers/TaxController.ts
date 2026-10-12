@@ -26,7 +26,7 @@ export const sanitizeTaxClassUpdatePayload = (input: unknown) => {
     }
 
     const payload = input as Record<string, unknown>;
-    const sanitized: Record<string, any> = {};
+    const sanitized: { name?: string; rate?: number; is_default?: boolean } = {};
 
     if (payload.name !== undefined) {
         const name = typeof payload.name === "string" ? payload.name.trim() : "";

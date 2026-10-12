@@ -1,11 +1,11 @@
-import { useState, useEffect, useRef } from "react";
+import { useCallback, useState, useEffect, useRef } from "react";
 import { ApiService } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { useAuth } from "@/hooks/useAuth";
+import { useAuth } from "@/hooks/useAuthContext";
 import {
   Scan,
   Plus,
@@ -45,12 +45,7 @@ export default function MobileCashier() {
     null,
   );
 
-  useEffect(() => {
-    loadProducts();
-    checkActiveShift();
-  }, []);
-
-  const checkActiveShift = async () => {
+  const checkActiveShift = useCallback(async () => {
     if (!user) return;
     try {
       const shift = await ApiService.get<{ id: string } | null>(
@@ -60,11 +55,11 @@ export default function MobileCashier() {
     } catch (error) {
       setActiveShift(null);
     }
-  };
+  }, [user]);
 
-  const loadProducts = async () => {
+  const loadProducts = useCallback(async () => {
     try {
-      const response = await ApiService.get<any[]>("/products");
+      const response = await ApiService.get<Product[]>("/products");
       setProducts(
         (response || []).filter((product) => Number(product.stock_on_hand) > 0),
       );
@@ -72,7 +67,12 @@ export default function MobileCashier() {
       setProducts([]);
       toast.error("Unable to load products");
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    void loadProducts();
+    void checkActiveShift();
+  }, [checkActiveShift, loadProducts]);
 
   const filteredProducts = products.filter(
     (p) =>
@@ -183,8 +183,10 @@ export default function MobileCashier() {
       checkoutKey.current = null;
       setCart([]);
       loadProducts();
-    } catch (error: any) {
-      toast.error(error.message);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Unable to complete the sale",
+      );
     } finally {
       checkoutInProgress.current = false;
       setCheckingOut(false);

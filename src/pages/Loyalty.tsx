@@ -110,16 +110,16 @@ export default function Loyalty() {
         pointsPerAmount:
           parseFloat(settingsMap.loyalty_points_per_amount) || 100,
       });
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message || "Failed to load loyalty settings");
     }
   };
 
   const loadLoyaltyMembers = async () => {
     try {
-      const data = await ApiService.get<any[]>("/loyalty/members");
-      setMembers((data || []) as LoyaltyMember[]);
-    } catch (error: any) {
+      const data = await ApiService.get<LoyaltyMember[]>("/loyalty/members");
+      setMembers(data || []);
+    } catch (error) {
       toast.error(error.message || "Error loading loyalty members");
     } finally {
       setLoading(false);
@@ -191,7 +191,7 @@ export default function Loyalty() {
         description: `${points} points added successfully`,
       });
       loadLoyaltyMembers();
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message || "Error adding points");
     }
   };
@@ -211,7 +211,7 @@ export default function Loyalty() {
         description: `${points} points redeemed successfully`,
       });
       loadLoyaltyMembers();
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message || "Error redeeming points");
     }
   };

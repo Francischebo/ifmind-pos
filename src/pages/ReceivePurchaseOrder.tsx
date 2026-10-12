@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useState, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ApiService } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -8,7 +8,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
 import { ArrowLeft, Package, AlertTriangle } from "lucide-react";
-import { useAuth } from "@/hooks/useAuth";
+import { useAuth } from "@/hooks/useAuthContext";
 import { Badge } from "@/components/ui/badge";
 
 interface POItem {
@@ -17,7 +17,7 @@ interface POItem {
   quantity: number;
   received_quantity: number;
   unit_cost: number;
-  products: { name: string; stock_on_hand: number } | null;
+  products: { id: string; name: string; stock_on_hand: number } | null;
 }
 
 interface ReceiveItem extends POItem {
@@ -39,6 +39,15 @@ interface PurchaseOrder {
   warehouse: { name: string } | null;
   total_amount: number;
   vendors: { name: string } | null;
+  vendor?: { name: string } | null;
+}
+
+interface PurchaseOrderItemResponse extends Omit<POItem, "products"> {
+  product: NonNullable<POItem["products"]>;
+}
+
+interface PurchaseOrderDetail extends PurchaseOrder {
+  items: PurchaseOrderItemResponse[];
 }
 
 export default function ReceivePurchaseOrder() {
@@ -50,39 +59,32 @@ export default function ReceivePurchaseOrder() {
   const [items, setItems] = useState<ReceiveItem[]>([]);
   const [notes, setNotes] = useState("");
 
-  useEffect(() => {
-    if (role !== "admin") {
-      toast.error("Access denied");
-      navigate("/purchase-orders");
-      return;
-    }
-    loadPO();
-  }, [id, role]);
-
-  const loadPO = async () => {
+  const loadPO = useCallback(async () => {
     if (!id) return;
 
     try {
-      const data = await ApiService.get<any>(`/purchase-orders/${id}`);
+      const data = await ApiService.get<PurchaseOrderDetail>(
+        `/purchase-orders/${id}`,
+      );
       if (data) {
         setPO(data);
 
-        // Initialize receiving quantities
-        const receiveItems: ReceiveItem[] = (data.items || []).map(
-          (item: any) => ({
-            ...item,
-            product_id: item.product.id,
-            products: item.product,
-            receiving_quantity: item.quantity - (item.received_quantity || 0),
-            batch_number: "",
-            expiry_date: "",
-            manufacturing_date: "",
-            supplier_batch_reference: "",
-            environmental_conditions: "",
-            rejection_reason: "",
-            rejected_quantity: 0,
-          }),
-        );
+        const receiveItems: ReceiveItem[] = data.items.map((item) => ({
+          id: item.id,
+          quantity: item.quantity,
+          received_quantity: item.received_quantity,
+          unit_cost: item.unit_cost,
+          product_id: item.product.id,
+          products: item.product,
+          receiving_quantity: item.quantity - (item.received_quantity || 0),
+          batch_number: "",
+          expiry_date: "",
+          manufacturing_date: "",
+          supplier_batch_reference: "",
+          environmental_conditions: "",
+          rejection_reason: "",
+          rejected_quantity: 0,
+        }));
 
         setItems(receiveItems);
       }
@@ -90,7 +92,16 @@ export default function ReceivePurchaseOrder() {
       console.error(error);
       toast.error("Failed to load purchase order details");
     }
-  };
+  }, [id]);
+
+  useEffect(() => {
+    if (role !== "admin") {
+      toast.error("Access denied");
+      navigate("/purchase-orders");
+      return;
+    }
+    void loadPO();
+  }, [loadPO, navigate, role]);
 
   const updateReceivingQuantity = (itemId: string, value: number) => {
     setItems(
@@ -112,10 +123,10 @@ export default function ReceivePurchaseOrder() {
     );
   };
 
-  const updateItemField = (
+  const updateItemField = <K extends keyof ReceiveItem,>(
     itemId: string,
-    field: keyof ReceiveItem,
-    value: any,
+    field: K,
+    value: ReceiveItem[K],
   ) => {
     setItems(
       items.map((item) =>
@@ -162,9 +173,13 @@ export default function ReceivePurchaseOrder() {
 
       toast.success(`Goods received successfully. GRN: ${response.grn}`);
       navigate("/purchase-orders"); // or delivery-notes if that exists in frontend
-    } catch (error: any) {
+    } catch (error) {
       console.error("Error receiving goods:", error);
-      toast.error(error.message || "Server error while receiving goods");
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Server error while receiving goods",
+      );
     } finally {
       setLoading(false);
     }
@@ -191,7 +206,7 @@ export default function ReceivePurchaseOrder() {
         <div>
           <h1 className="text-3xl font-bold">Receive Goods</h1>
           <p className="text-muted-foreground">
-            PO #{po.po_number} - {(po as any).vendor?.name || po.vendors?.name}{" "}
+            PO #{po.po_number} - {po.vendor?.name || po.vendors?.name}{" "}
             · Receiving at {po.warehouse?.name || "Main warehouse"}
           </p>
         </div>

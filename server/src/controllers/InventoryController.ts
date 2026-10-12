@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { AuthenticatedRequest } from "../middleware/auth";
 import { AppDataSource } from "../data-source";
 import { Product } from "../entity/Product";
 import { User } from "../entity/User";
@@ -13,6 +14,7 @@ import { PaymentCheckoutSession } from "../entity/PaymentCheckoutSession";
 import { AccountingService } from "../services/AccountingService";
 import { InventoryService } from "../services/InventoryService";
 import { SocketService } from "../services/SocketService";
+import { getErrorMessage } from "../utils/errors";
 import { getReservedQuantity } from "../services/CheckoutReservationService";
 
 const ALLOWED_ADJUSTMENT_TYPES = new Set(Object.values(AdjustmentType));
@@ -175,7 +177,7 @@ export const sanitizeStockTakeUpdatePayload = (input: unknown): SanitizedStockTa
 
 export class InventoryController {
     
-    static async createAdjustment(req: any, res: Response) {
+    static async createAdjustment(req: AuthenticatedRequest, res: Response) {
         const queryRunner = AppDataSource.createQueryRunner();
         await queryRunner.connect();
         await queryRunner.startTransaction();
@@ -183,7 +185,7 @@ export class InventoryController {
         try {
             const { product_id, warehouse_id, type, quantity_adjusted, reason } = sanitizeInventoryAdjustmentPayload(req.body);
             
-            const authorizer = await queryRunner.manager.findOneBy(User, { id: req.user.id });
+            const authorizer = await queryRunner.manager.findOneBy(User, { id: req.user!.id });
             const product = await queryRunner.manager.findOne(Product, {
                 where: { id: product_id },
                 lock: { mode: "pessimistic_write" },
@@ -309,23 +311,23 @@ export class InventoryController {
 
             res.status(201).json(adjustment);
 
-        } catch(err: any) {
+        } catch (err) {
             await queryRunner.rollbackTransaction();
             console.error(err);
-            res.status(400).json({ message: err.message || "Error creating adjustment" });
+            res.status(400).json({ message: getErrorMessage(err, "Error creating adjustment") });
         } finally {
             await queryRunner.release();
         }
     }
 
-    static async createTransfer(req: any, res: Response) {
+    static async createTransfer(req: AuthenticatedRequest, res: Response) {
         const queryRunner = AppDataSource.createQueryRunner();
         await queryRunner.connect();
         await queryRunner.startTransaction();
         try {
             const { product_id, from_warehouse_id, to_warehouse_id, quantity } = sanitizeInventoryTransferPayload(req.body);
             
-            const requester = await queryRunner.manager.findOneBy(User, { id: req.user.id });
+            const requester = await queryRunner.manager.findOneBy(User, { id: req.user!.id });
             const product = await queryRunner.manager.findOneBy(Product, { id: product_id });
             const from_warehouse = await queryRunner.manager.findOneBy(Warehouse, { id: from_warehouse_id });
             const to_warehouse = await queryRunner.manager.findOneBy(Warehouse, { id: to_warehouse_id });
@@ -361,23 +363,23 @@ export class InventoryController {
             await queryRunner.commitTransaction();
 
             res.status(201).json(transfer);
-        } catch(err: any) {
+        } catch (err) {
             await queryRunner.rollbackTransaction();
-            res.status(400).json({ message: err.message || "Error creating transfer" });
+            res.status(400).json({ message: getErrorMessage(err, "Error creating transfer") });
         } finally {
             await queryRunner.release();
         }
     }
 
-    static async updateTransferStatus(req: any, res: Response) {
+    static async updateTransferStatus(req: AuthenticatedRequest, res: Response) {
         const queryRunner = AppDataSource.createQueryRunner();
         await queryRunner.connect();
         await queryRunner.startTransaction();
         try {
-            const { id } = req.params;
+            const id = req.params.id;
             const { status } = sanitizeTransferStatusPayload(req.body);
             
-            const fulfiller = await queryRunner.manager.findOneBy(User, { id: req.user.id });
+            const fulfiller = await queryRunner.manager.findOneBy(User, { id: req.user!.id });
             const transfer = await queryRunner.manager.findOne(InventoryTransfer, { 
                 where: { id },
                 relations: ["product", "from_warehouse", "to_warehouse"]
@@ -478,9 +480,9 @@ export class InventoryController {
                 );
             }
             res.status(200).json(transfer);
-        } catch(err: any) {
+        } catch (err) {
             await queryRunner.rollbackTransaction();
-            res.status(400).json({ message: err.message || "Error updating transfer" });
+            res.status(400).json({ message: getErrorMessage(err, "Error updating transfer") });
         } finally {
             await queryRunner.release();
         }
@@ -493,8 +495,8 @@ export class InventoryController {
                 order: { created_at: "DESC" }
             });
             res.status(200).json(adjustments);
-        } catch (err: any) {
-            res.status(500).json({ message: err.message || "Error fetching adjustments" });
+        } catch (err) {
+            res.status(500).json({ message: getErrorMessage(err, "Error fetching adjustments") });
         }
     }
 
@@ -505,8 +507,8 @@ export class InventoryController {
                 order: { created_at: "DESC" }
             });
             res.status(200).json(transfers);
-        } catch (err: any) {
-            res.status(500).json({ message: err.message || "Error fetching transfers" });
+        } catch (err) {
+            res.status(500).json({ message: getErrorMessage(err, "Error fetching transfers") });
         }
     }
 
@@ -517,19 +519,19 @@ export class InventoryController {
                 order: { created_at: "DESC" }
             });
             res.status(200).json(stockTakes);
-        } catch (err: any) {
-            res.status(500).json({ message: err.message || "Error fetching stock takes" });
+        } catch (err) {
+            res.status(500).json({ message: getErrorMessage(err, "Error fetching stock takes") });
         }
     }
 
-    static async initiateStockTake(req: any, res: Response) {
+    static async initiateStockTake(req: AuthenticatedRequest, res: Response) {
         const queryRunner = AppDataSource.createQueryRunner();
         await queryRunner.connect();
         await queryRunner.startTransaction();
 
         try {
             const { warehouse_id, notes } = sanitizeStockTakePayload(req.body);
-            const creator = await queryRunner.manager.findOneBy(User, { id: req.user.id });
+            const creator = await queryRunner.manager.findOneBy(User, { id: req.user!.id });
             const warehouse = await queryRunner.manager.findOneBy(Warehouse, { id: warehouse_id });
 
             if (!creator || !warehouse) {
@@ -582,9 +584,9 @@ export class InventoryController {
                 relations: ["warehouse", "creator", "items", "items.product"]
             });
             res.status(201).json(created);
-        } catch (err: any) {
+        } catch (err) {
             await queryRunner.rollbackTransaction();
-            res.status(400).json({ message: err.message || "Error initiating stock take" });
+            res.status(400).json({ message: getErrorMessage(err, "Error initiating stock take") });
         } finally {
             await queryRunner.release();
         }
@@ -596,7 +598,7 @@ export class InventoryController {
         await queryRunner.startTransaction();
 
         try {
-            const { id } = req.params;
+            const id = req.params.id;
             const { items, status } = sanitizeStockTakeUpdatePayload(req.body);
 
             const lockedStockTake = await queryRunner.manager.findOne(StockTake, {
@@ -651,27 +653,27 @@ export class InventoryController {
 
             await queryRunner.commitTransaction();
             res.status(200).json({ message: "Counts updated successfully" });
-        } catch (err: any) {
+        } catch (err) {
             await queryRunner.rollbackTransaction();
-            res.status(400).json({ message: err.message || "Error updating counts" });
+            res.status(400).json({ message: getErrorMessage(err, "Error updating counts") });
         } finally {
             await queryRunner.release();
         }
     }
 
-    static async completeStockTake(req: any, res: Response) {
+    static async completeStockTake(req: AuthenticatedRequest, res: Response) {
         const queryRunner = AppDataSource.createQueryRunner();
         await queryRunner.connect();
         await queryRunner.startTransaction();
 
         try {
-            const { id } = req.params;
+            const id = req.params.id;
             const lockedStockTake = await queryRunner.manager.findOne(StockTake, {
                 where: { id: id as string },
                 lock: { mode: "pessimistic_write" },
             });
             if (!lockedStockTake) throw new Error("Stock Take not found");
-            const completer = await queryRunner.manager.findOneBy(User, { id: req.user.id });
+            const completer = await queryRunner.manager.findOneBy(User, { id: req.user!.id });
             const stockTake = await queryRunner.manager.findOne(StockTake, {
                 where: { id: id as string },
                 relations: ["warehouse", "items", "items.product"]
@@ -790,9 +792,9 @@ export class InventoryController {
                 SocketService.emitInventoryUpdated(update.productId, update.stockOnHand, update.warehouseId);
             }
             res.status(200).json(stockTake);
-        } catch (err: any) {
+        } catch (err) {
             await queryRunner.rollbackTransaction();
-            res.status(400).json({ message: err.message || "Error completing stock take" });
+            res.status(400).json({ message: getErrorMessage(err, "Error completing stock take") });
         } finally {
             await queryRunner.release();
         }

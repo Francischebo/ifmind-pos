@@ -28,9 +28,9 @@ import { useHybridPayment } from "@/hooks/useHybridPayment";
 import { useLoyaltyPoints } from "@/hooks/useLoyaltyPoints";
 import { ApiService } from "@/lib/api";
 import { LoyaltyRedemption } from "@/components/LoyaltyRedemption";
-import { useAuth } from "@/hooks/useAuth";
+import { useAuth } from "@/hooks/useAuthContext";
 import { useWebSockets } from "@/hooks/useWebSockets";
-import { useState, useEffect, useRef } from "react";
+import { useCallback, useState, useEffect, useRef } from "react";
 import {
   ShoppingCart,
   Package,
@@ -55,6 +55,13 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { printerService } from "@/lib/hardware/escpos";
+import { useOfflineQueue } from "@/hooks/useOfflineQueueContext";
+import { OfflineSaleReceipt } from "@/components/OfflineSaleReceipt";
+import {
+  OfflineSaleRecord,
+  readCachedCatalog,
+  saveCachedCatalog,
+} from "@/lib/offlineStore";
 
 interface Warehouse {
   id: string;
@@ -68,6 +75,7 @@ interface Product {
   name: string;
   retail_price: number;
   tax_rate: number;
+  tax_class?: { rate: number | string } | null;
   stock_on_hand: number;
   category?: string;
 }
@@ -109,7 +117,8 @@ interface ParkedSale {
 }
 
 export default function Sales() {
-  const { user } = useAuth();
+  const { user, isOfflineSession } = useAuth();
+  const offline = useOfflineQueue();
   const { awardLoyaltyPoints, redeemLoyaltyPoints } = useLoyaltyPoints();
 
   // Generate unique invoice number
@@ -129,12 +138,21 @@ export default function Sales() {
   const [searchTerm, setSearchTerm] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
   const [selectedCustomer, setSelectedCustomer] = useState<string>("walk-in");
-  const [selectedWarehouse, setSelectedWarehouse] = useState<string>("");
+  const [selectedWarehouse, setSelectedWarehouse] = useState<string>(() => {
+    if (!user?.id) return "";
+    try {
+      const saved = localStorage.getItem(`pos:last-warehouse:${user.id}`);
+      return saved ? (JSON.parse(saved) as { id?: string }).id || "" : "";
+    } catch {
+      return "";
+    }
+  });
   const [loading, setLoading] = useState(false);
   const [showOpenShiftDialog, setShowOpenShiftDialog] = useState(false);
   const [openingFloat, setOpeningFloat] = useState("");
   const [openingShift, setOpeningShift] = useState(false);
   const [completedSaleId, setCompletedSaleId] = useState<string | null>(null);
+  const [provisionalReceipt, setProvisionalReceipt] = useState<OfflineSaleRecord | null>(null);
   const [parkedSales, setParkedSales] = useState<ParkedSale[]>([]);
   const [showParkedModal, setShowParkedModal] = useState(false);
   const barcodeInputRef = useRef<HTMLInputElement>(null);
@@ -172,16 +190,24 @@ export default function Sales() {
   }
 
   const payment = useHybridPayment(getTotalAmount(), user?.id || "unknown");
+  const {
+    checkoutReserved,
+    checkoutSessionId,
+    clearMissingCheckout,
+    finishCheckoutRecovery,
+    reset: resetPayment,
+    restoreCheckoutSession,
+  } = payment;
   const restoredCheckoutIdRef = useRef("");
 
   useEffect(() => {
     if (
-      !payment.checkoutReserved ||
-      restoredCheckoutIdRef.current === payment.checkoutSessionId
+      !checkoutReserved ||
+      restoredCheckoutIdRef.current === checkoutSessionId
     ) {
       return;
     }
-    const sessionId = payment.checkoutSessionId;
+    const sessionId = checkoutSessionId;
     restoredCheckoutIdRef.current = sessionId;
     void ApiService.get<{
       id: string;
@@ -213,7 +239,7 @@ export default function Sales() {
     }>(`/sales/checkouts/${sessionId}`)
       .then((session) => {
         if (session.status !== "reserved") {
-          payment.reset();
+          resetPayment();
           return;
         }
         setCart(session.items.map((item) => {
@@ -233,20 +259,20 @@ export default function Sales() {
         setSelectedWarehouse(session.warehouse_id || "");
         setSelectedCustomer(session.customer_id || "walk-in");
         setLoyaltyDiscount(Number(session.loyalty_discount) || 0);
-        payment.restoreCheckoutSession(session);
+        restoreCheckoutSession(session);
       })
       .catch((error) => {
         console.error("Unable to recover reserved checkout:", error);
-        payment.finishCheckoutRecovery();
+        finishCheckoutRecovery();
         if (
           error instanceof Error &&
           error.message.toLowerCase().includes("checkout session not found")
         ) {
           const hasCurrentCart = cart.length > 0;
           if (hasCurrentCart) {
-            payment.clearMissingCheckout();
+            clearMissingCheckout();
           } else {
-            payment.reset();
+            resetPayment();
           }
           toast.info("The previous checkout reservation is no longer active", {
             description: hasCurrentCart
@@ -260,12 +286,12 @@ export default function Sales() {
         });
       });
   }, [
-    payment.checkoutReserved,
-    payment.checkoutSessionId,
-    payment.clearMissingCheckout,
-    payment.finishCheckoutRecovery,
-    payment.reset,
-    payment.restoreCheckoutSession,
+    checkoutReserved,
+    checkoutSessionId,
+    clearMissingCheckout,
+    finishCheckoutRecovery,
+    resetPayment,
+    restoreCheckoutSession,
     cart.length,
     products,
   ]);
@@ -291,58 +317,119 @@ export default function Sales() {
   };
 
   useEffect(() => {
-    loadWarehouses();
-    loadCustomers();
-    loadMpesaConfig();
-    barcodeInputRef.current?.focus();
-  }, []);
+    if (!user?.id || !selectedWarehouse) return;
+    const warehouse = warehouses.find((entry) => entry.id === selectedWarehouse);
+    if (!warehouse) return;
+    try {
+      localStorage.setItem(
+        `pos:last-warehouse:${user.id}`,
+        JSON.stringify(warehouse),
+      );
+    } catch (error) {
+      console.error("Unable to save the selected POS location:", error);
+    }
+  }, [selectedWarehouse, user?.id, warehouses]);
 
-  useEffect(() => {
-    loadProducts(selectedWarehouse);
-  }, [selectedWarehouse]);
-
-  const loadWarehouses = async () => {
+  const loadWarehouses = useCallback(async () => {
     try {
       const data = await ApiService.get<Warehouse[]>("/warehouses");
       if (data && data.length > 0) {
         setWarehouses(data);
-        setSelectedWarehouse(data[0].id);
+        const preferred = data.some((warehouse) => warehouse.id === selectedWarehouse)
+          ? selectedWarehouse
+          : data[0].id;
+        setSelectedWarehouse(preferred);
+        if (user?.id) {
+          localStorage.setItem(
+            `pos:last-warehouse:${user.id}`,
+            JSON.stringify(data.find((warehouse) => warehouse.id === preferred)),
+          );
+        }
       }
-    } catch (e: any) {
-      console.warn("Failed to load warehouses");
+    } catch (error) {
+      console.warn("Unable to refresh warehouses; using the last saved POS location.", error);
+      if (!user?.id) return;
+      try {
+        const saved = localStorage.getItem(`pos:last-warehouse:${user.id}`);
+        const warehouse = saved ? JSON.parse(saved) as Warehouse : null;
+        if (warehouse?.id) {
+          setWarehouses([warehouse]);
+          setSelectedWarehouse(warehouse.id);
+        }
+      } catch (storageError) {
+        console.error("Unable to restore the saved POS location:", storageError);
+      }
     }
-  };
+  }, [selectedWarehouse, user?.id]);
 
-  const loadProducts = async (warehouseId?: string) => {
+  const loadProducts = useCallback(async (warehouseId?: string) => {
+    const requestedWarehouseId = warehouseId ?? selectedWarehouse;
     try {
-      const endpoint = warehouseId
-        ? `/products?warehouse_id=${warehouseId}`
+      const endpoint = requestedWarehouseId
+        ? `/products?warehouse_id=${encodeURIComponent(requestedWarehouseId)}`
         : "/products";
       const data = await ApiService.get<Product[]>(endpoint);
-      setProducts(data || []);
-    } catch (e: any) {
-      toast.error("Failed to load products: " + e.message);
+      const normalized = (data || []).map((product) => ({
+        ...product,
+        retail_price: Number(product.retail_price),
+        tax_rate: Number(product.tax_class?.rate ?? product.tax_rate ?? 0),
+        stock_on_hand: Number(product.stock_on_hand),
+      }));
+      setProducts(normalized);
+      if (user?.id) {
+        await saveCachedCatalog(user.id, requestedWarehouseId, normalized);
+      }
+    } catch (error) {
+      if (user?.id) {
+        try {
+          const cached = await readCachedCatalog(user.id, requestedWarehouseId);
+          if (cached) {
+            setProducts(cached.products.map((product) => ({
+              ...product,
+              retail_price: Number(product.retail_price),
+              tax_rate: Number(product.tax_class?.rate ?? product.tax_rate ?? 0),
+              stock_on_hand: Number(product.stock_on_hand),
+            })));
+            return;
+          }
+        } catch (storageError) {
+          console.error("Unable to restore the cached POS catalogue:", storageError);
+        }
+      }
+      setProducts([]);
+      toast.error(`Unable to load products${error instanceof Error ? `: ${error.message}` : "."}`);
     }
-  };
+  }, [selectedWarehouse, user?.id]);
 
-  const loadCustomers = async () => {
+  const loadCustomers = useCallback(async () => {
     try {
       const data = await ApiService.get<Customer[]>("/customers");
       setCustomers(data || []);
-    } catch (e: any) {
+    } catch (e) {
       console.warn("Customers endpoint not ready yet");
       setCustomers([]);
     }
-  };
+  }, []);
 
-  const loadMpesaConfig = async () => {
+  const loadMpesaConfig = useCallback(async () => {
     try {
       const config = await ApiService.get<MpesaPaymentConfig>("/payments/mpesa/config");
       setMpesaConfig(config);
     } catch (error) {
       console.error("Failed to load M-Pesa payment configuration:", error);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    void loadWarehouses();
+    void loadCustomers();
+    void loadMpesaConfig();
+    barcodeInputRef.current?.focus();
+  }, [loadCustomers, loadMpesaConfig, loadWarehouses]);
+
+  useEffect(() => {
+    void loadProducts(selectedWarehouse);
+  }, [loadProducts, selectedWarehouse]);
 
   const handleBarcodeInput = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
@@ -470,6 +557,85 @@ export default function Sales() {
     };
   }
 
+  const completeOfflineCashSale = async () => {
+    if (!user?.id) {
+      toast.error("Sign in online on this device before using offline checkout.");
+      return;
+    }
+    if (cart.length === 0) {
+      toast.error("Cart is empty");
+      return;
+    }
+    if (
+      selectedCustomer !== "walk-in" ||
+      loyaltyDiscount > 0 ||
+      payment.mpesaAmount > 0 ||
+      payment.storeCreditAmount > 0 ||
+      payment.storeCreditBarcode ||
+      payment.mpesaPending ||
+      payment.checkoutReserved ||
+      payment.recoveringMpesaSession
+    ) {
+      toast.error("Offline checkout supports walk-in cash only; clear other payment methods and discounts.");
+      return;
+    }
+
+    const total = Number(calculateTotals().total);
+    if (!Number.isFinite(total) || total <= 0 ||
+        Math.round(payment.cashAmount * 100) < Math.round(total * 100)) {
+      toast.error("Enter enough cash to cover the full sale before saving it offline.");
+      return;
+    }
+
+    const capturedAt = new Date().toISOString();
+    const id = crypto.randomUUID();
+    const record: OfflineSaleRecord = {
+      id,
+      userId: user.id,
+      capturedAt,
+      expectedTotal: total,
+      items: cart.map((item) => ({
+        productId: item.id,
+        name: item.name,
+        sku: item.sku,
+        quantity: item.quantity,
+        unitPrice: Number(item.retail_price),
+      })),
+      status: "pending",
+      attempts: 0,
+      payload: {
+        items: cart.map((item) => ({ product_id: item.id, quantity: item.quantity })),
+        payment_method: "cash",
+        cash_amount: Number(payment.cashAmount.toFixed(2)),
+        idempotency_key: `offline_${id}`,
+        expected_total_amount: Number(total.toFixed(2)),
+        offline_created_at: capturedAt,
+        ...(selectedWarehouse ? { warehouse_id: selectedWarehouse } : {}),
+      },
+    };
+
+    setLoading(true);
+    try {
+      await offline.enqueueSale(record);
+      if (payment.cashAmount > 0) {
+        printerService.openCashDrawer().catch((error) => {
+          console.error("Unable to open the cash drawer for offline sale:", error);
+        });
+      }
+      setProvisionalReceipt(record);
+      setCart([]);
+      setSelectedCustomer("walk-in");
+      setLoyaltyDiscount(0);
+      setLoyaltyPointsToRedeem(0);
+      payment.reset();
+    } catch (error) {
+      console.error("Unable to save provisional offline sale:", error);
+      toast.error(error instanceof Error ? error.message : "Offline sale could not be saved.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const parkSale = async () => {
     if (cart.length === 0) return;
     setLoading(true);
@@ -488,7 +654,7 @@ export default function Sales() {
       setCart([]);
       setSelectedCustomer("walk-in");
       payment.reset();
-    } catch (e: any) {
+    } catch (e) {
       toast.error("Failed to park sale: " + e.message);
     } finally {
       setLoading(false);
@@ -500,7 +666,7 @@ export default function Sales() {
       const data = await ApiService.get<ParkedSale[]>("/sales/parked");
       setParkedSales(data);
       setShowParkedModal(true);
-    } catch (e: any) {
+    } catch (e) {
       toast.error("Failed to load parked sales: " + e.message);
     }
   };
@@ -532,6 +698,10 @@ export default function Sales() {
   };
 
   const completeSale = async () => {
+    if (!offline.isOnline || isOfflineSession) {
+      await completeOfflineCashSale();
+      return;
+    }
     if (cart.length === 0) {
       toast.error("Cart is empty");
       return;
@@ -573,7 +743,7 @@ export default function Sales() {
       }));
 
       // Use server-side secure sale creation
-      const saleResult = await ApiService.post<any>("/sales", {
+      const saleResult = await ApiService.post<{ id?: string; sale?: { id?: string } }>("/sales", {
         customer_id: selectedCustomer === "walk-in" ? null : selectedCustomer,
         warehouse_id: selectedWarehouse,
         payment_method:
@@ -629,7 +799,7 @@ export default function Sales() {
       setLoyaltyPointsToRedeem(0);
       payment.reset();
       loadProducts(selectedWarehouse);
-    } catch (error: any) {
+    } catch (error) {
       console.error("Error completing sale:", error);
       toast.error("Failed to complete sale: " + error.message);
     } finally {
@@ -664,6 +834,10 @@ export default function Sales() {
   };
 
   const handleMpesaPayment = async (phone: string, amount: number) => {
+    if (!offline.isOnline || isOfflineSession) {
+      toast.error("M-Pesa checkout requires a live server connection.");
+      return false;
+    }
     // Validate phone number
     if (!validatePhoneNumber(phone)) {
       toast.error("Please enter a valid Kenyan phone number");
@@ -697,13 +871,17 @@ export default function Sales() {
         paymentRateLimiter,
         `mpesa_${user?.id}`,
       );
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message);
       return false;
     }
   };
 
   const handlePaybillPayment = async (phone: string, amount: number) => {
+    if (!offline.isOnline || isOfflineSession) {
+      toast.error("Paybill checkout requires a live server connection.");
+      return false;
+    }
     if (!validatePhoneNumber(phone)) {
       toast.error("Please enter the phone number used to make the Paybill payment");
       return false;
@@ -746,6 +924,10 @@ export default function Sales() {
     amount: number,
     barcode: string | null,
   ) => {
+    if (!offline.isOnline || isOfflineSession) {
+      toast.error("Store credit checkout requires a live server connection.");
+      return;
+    }
     payment.addStoreCreditPayment(amount, barcode);
   };
 
@@ -788,6 +970,79 @@ export default function Sales() {
             </div>
           </div>
         </div>
+
+        {!offline.isOnline && (
+          <Card className="border-amber-500 bg-amber-50 text-amber-950 dark:bg-amber-950 dark:text-amber-50">
+            <CardContent className="space-y-1 p-4">
+              <p className="font-semibold">Offline POS — provisional mode</p>
+              <p className="text-sm">
+                Catalogue and stock are the last saved snapshot. Only walk-in cash sales can be captured; price, tax, stock, and shift are rechecked when the server is reachable.
+              </p>
+            </CardContent>
+          </Card>
+        )}
+
+        {offline.sales.some((sale) => sale.status !== "synced") && (
+          <Card className="border-primary/30">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">
+                Offline sales awaiting confirmation ({offline.queueLength})
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {offline.sales
+                .filter((sale) => sale.status !== "synced")
+                .slice()
+                .reverse()
+                .map((sale) => (
+                  <div key={sale.id} className="rounded-md border p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <p className="font-medium">
+                          OFF-{sale.id.slice(0, 8).toUpperCase()} · KSh {sale.expectedTotal.toLocaleString("en-KE", { minimumFractionDigits: 2 })}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {new Date(sale.capturedAt).toLocaleString()} ·{" "}
+                          {sale.status === "conflict"
+                            ? "Needs review"
+                            : sale.status === "syncing"
+                              ? "Syncing"
+                              : "Waiting for server"}
+                        </p>
+                        {sale.lastError && (
+                          <p className="mt-1 text-sm text-destructive">{sale.lastError}</p>
+                        )}
+                      </div>
+                      <div className="flex gap-2">
+                        {sale.status === "conflict" && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => void offline.retrySale(sale.id)}
+                          >
+                            Retry
+                          </Button>
+                        )}
+                        {sale.status !== "syncing" && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => {
+                              if (window.confirm("Remove this provisional sale from this device? Keep its paper reference and reconcile it manually first.")) {
+                                void offline.discardSale(sale.id);
+                              }
+                            }}
+                          >
+                            Discard
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+            </CardContent>
+          </Card>
+        )}
 
         <div className="grid gap-6 lg:grid-cols-[1fr_450px]">
           {/* Product Section */}
@@ -1088,6 +1343,11 @@ export default function Sales() {
           onClose={() => setCompletedSaleId(null)}
         />
       )}
+
+      <OfflineSaleReceipt
+        sale={provisionalReceipt}
+        onClose={() => setProvisionalReceipt(null)}
+      />
 
       <Dialog
         open={showOpenShiftDialog}

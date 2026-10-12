@@ -12,15 +12,13 @@ export const useWebSockets = (callbacks: {
     callbacksRef.current = callbacks;
 
     useEffect(() => {
-        const token = localStorage.getItem("jwt_token");
-        if (!token) return;
-
         // API_BASE_URL usually ends with /api, we need base host
         const parsedUrl = new URL(API_BASE_URL, window.location.origin);
         const baseUrl = `${parsedUrl.protocol}//${parsedUrl.host}`;
 
         socketRef.current = io(baseUrl, {
-            auth: { token: token },
+            withCredentials: true,
+            transports: ["websocket"],
         });
 
         socketRef.current.on("connect", () => {

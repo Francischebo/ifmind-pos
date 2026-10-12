@@ -1,5 +1,11 @@
 import { expect, test } from "@playwright/test";
 
+declare global {
+  interface Window {
+    __grnBlobUrl?: string | null;
+  }
+}
+
 test("cashier completes OTP login, sees dashboard data, and can log out", async ({ page }) => {
   await page.route("**/api/**", async (route) => {
     const { pathname } = new URL(route.request().url());
@@ -722,7 +728,7 @@ test("cash-only reserved checkout can be released after refreshing the POS", asy
   await expect(page.getByText("1 items", { exact: true })).toBeVisible();
 });
 
-test("return sale search excludes unpaid, pending, and voided sales", async ({ page }) => {
+test("return sale search uses invoice numbers and displays server-approved returnable sales", async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem("jwt_token", "e2e-admin-token");
   });
@@ -743,48 +749,21 @@ test("return sale search excludes unpaid, pending, and voided sales", async ({ p
       return;
     }
 
-    if (pathname.endsWith("/sales")) {
+    if (pathname.endsWith("/returns/search")) {
+      expect(new URL(route.request().url()).searchParams.get("invoice_number")).toBe("INV-GOOD123");
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify([
-          {
-            id: "sale-good-12345678",
-            status: "completed",
-            payment_status: "paid",
-            total_amount: 100,
-            created_at: "2026-10-03T09:00:00.000Z",
-            payment_method: "cash",
-            items: [{ id: "item-returnable", quantity: 1, unit_price: 100, tax_rate: 0, product: { name: "Returnable item" } }],
-          },
-          {
-            id: "sale-unpaid-12345678",
-            status: "completed",
-            payment_status: "pending",
-            total_amount: 100,
-            created_at: "2026-10-03T09:00:00.000Z",
-            payment_method: "cash",
-            items: [],
-          },
-          {
-            id: "sale-pending-12345678",
-            status: "pending",
-            payment_status: "paid",
-            total_amount: 100,
-            created_at: "2026-10-03T09:00:00.000Z",
-            payment_method: "cash",
-            items: [],
-          },
-          {
-            id: "sale-voided-12345678",
-            status: "voided",
-            payment_status: "paid",
-            total_amount: 100,
-            created_at: "2026-10-03T09:00:00.000Z",
-            payment_method: "cash",
-            items: [],
-          },
-        ]),
+        body: JSON.stringify([{
+          id: "sale-good-12345678",
+          invoice_number: "INV-GOOD123",
+          status: "completed",
+          payment_status: "paid",
+          total_amount: 100,
+          created_at: "2026-10-03T09:00:00.000Z",
+          payment_method: "cash",
+          items: [{ id: "item-returnable", quantity: 1, unit_price: 100, tax_rate: 0, product: { name: "Returnable item" } }],
+        }]),
       });
       return;
     }
@@ -794,15 +773,12 @@ test("return sale search excludes unpaid, pending, and voided sales", async ({ p
 
   await page.goto("/returns", { waitUntil: "domcontentloaded" });
   await page.getByRole("button", { name: "Request Return" }).click();
-  const saleSearch = page.getByPlaceholder("Enter sale UUID...");
-  await saleSearch.fill("sale-");
+  const saleSearch = page.getByPlaceholder("Enter invoice number...");
+  await saleSearch.fill("INV-GOOD123");
   await saleSearch.press("Enter");
-  await expect(page.getByText("sale-goo...", { exact: true })).toBeVisible();
-  await page.getByText("sale-goo...", { exact: true }).click();
+  await expect(page.getByText("INV-GOOD123", { exact: true })).toBeVisible();
+  await page.getByText("INV-GOOD123", { exact: true }).click();
   await expect(page.getByText("Returnable item")).toBeVisible();
-  await expect(page.getByText("sale-una...", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("sale-pen...", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("sale-voi...", { exact: true })).toHaveCount(0);
 });
 
 test("new purchase orders submit an explicit receiving warehouse", async ({ page }) => {
@@ -929,11 +905,11 @@ test("delivery notes show receipt details and escape untrusted invoice content",
 
   await page.addInitScript(() => {
     localStorage.setItem("jwt_token", "e2e-admin-token");
-    (window as any).__grnBlobUrl = null;
-    (window as any).open = (url: string) => {
-      (window as any).__grnBlobUrl = url;
-      return { onload: null, print: () => undefined };
-    };
+    window.__grnBlobUrl = null;
+    window.open = ((url?: string | URL) => {
+      window.__grnBlobUrl = url?.toString() ?? null;
+      return { onload: null, print: () => undefined } as Window;
+    }) as typeof window.open;
   });
 
   await page.route("**/api/**", async (route) => {
@@ -1004,7 +980,7 @@ test("delivery notes show receipt details and escape untrusted invoice content",
 
   await dialog.getByRole("button", { name: "Download GRN Invoice" }).click();
   const generatedHtml = await page.evaluate(async () => {
-    const url = (window as any).__grnBlobUrl as string;
+    const url = window.__grnBlobUrl as string;
     return await (await fetch(url)).text();
   });
   expect(generatedHtml).toContain("&lt;script&gt;window.__grnPwned=true&lt;/script&gt;");

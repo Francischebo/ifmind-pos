@@ -37,14 +37,16 @@ export class DashboardController {
                 method: sale.payment_method
             }));
 
-            const paymentSummary = todaySalesData.reduce((acc: any, sale) => {
+            const paymentSummary = new Map<string, number>();
+            for (const sale of todaySalesData) {
                 const method = sale.payment_method;
-                if (!acc[method]) acc[method] = 0;
-                acc[method] += Number(sale.total_amount);
-                return acc;
-            }, {});
+                paymentSummary.set(
+                    method,
+                    (paymentSummary.get(method) || 0) + Number(sale.total_amount),
+                );
+            }
 
-            const salesByMethod = Object.entries(paymentSummary).map(([method, amount]: [string, any]) => ({
+            const salesByMethod = Array.from(paymentSummary, ([method, amount]) => ({
                 method,
                 amount,
                 percentage: todaySales > 0 ? (amount / todaySales) * 100 : 0
@@ -89,22 +91,25 @@ export class DashboardController {
                 relations: ["product"]
             });
 
-            const productSummary = todaySaleItems.reduce((acc: any, item) => {
-                const pid = item.product.id;
-                if (!acc[pid]) {
-                    acc[pid] = {
-                        name: item.product.name,
-                        quantity: 0,
-                        revenue: 0
-                    };
-                }
-                acc[pid].quantity += item.quantity;
-                acc[pid].revenue += Number(item.line_total);
-                return acc;
-            }, {});
+            const productSummary = new Map<string, {
+                name: string;
+                quantity: number;
+                revenue: number;
+            }>();
+            for (const item of todaySaleItems) {
+                const productId = item.product.id;
+                const summary = productSummary.get(productId) || {
+                    name: item.product.name,
+                    quantity: 0,
+                    revenue: 0,
+                };
+                summary.quantity += item.quantity;
+                summary.revenue += Number(item.line_total);
+                productSummary.set(productId, summary);
+            }
 
-            const topProducts = Object.values(productSummary)
-                .sort((a: any, b: any) => b.revenue - a.revenue)
+            const topProducts = Array.from(productSummary.values())
+                .sort((a, b) => b.revenue - a.revenue)
                 .slice(0, 5);
 
             // Get products info

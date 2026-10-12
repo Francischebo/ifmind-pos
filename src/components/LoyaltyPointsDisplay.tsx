@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ApiService } from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -30,11 +30,7 @@ export function LoyaltyPointsDisplay({
   const [customer, setCustomer] = useState<CustomerInfo | null>(null);
   const [settings, setSettings] = useState<Record<string, string>>({});
 
-  useEffect(() => {
-    loadData();
-  }, [customerId]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       const [members, settingsMap] = await Promise.all([
         ApiService.get<
@@ -72,7 +68,11 @@ export function LoyaltyPointsDisplay({
     } catch (error) {
       console.error("Error loading loyalty data:", error);
     }
-  };
+  }, [customerId]);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
 
   if (!member || !customer) return null;
 

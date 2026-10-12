@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useState, useEffect } from "react";
 import { ApiService } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -43,22 +43,23 @@ interface StockMovement {
   products: { name: string; sku: string } | null;
 }
 
+interface StockMovementResponse extends Omit<StockMovement, "unit_cost" | "products"> {
+  unit_cost: number | string | null;
+  product?: StockMovement["products"];
+}
+
 export default function StockMovements() {
   const [movements, setMovements] = useState<StockMovement[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    loadMovements();
-  }, [typeFilter]);
-
-  const loadMovements = async () => {
+  const loadMovements = useCallback(async () => {
     setLoading(true);
     try {
       const typeQuery =
         typeFilter === "all" ? "" : `?type=${encodeURIComponent(typeFilter)}`;
-      const data = await ApiService.get<any[]>(
+      const data = await ApiService.get<StockMovementResponse[]>(
         `/inventory/movements${typeQuery}`,
       );
       setMovements(
@@ -73,7 +74,11 @@ export default function StockMovements() {
       toast.error("Failed to load stock movements");
     }
     setLoading(false);
-  };
+  }, [typeFilter]);
+
+  useEffect(() => {
+    void loadMovements();
+  }, [loadMovements]);
 
   const getMovementColor = (
     type: string,

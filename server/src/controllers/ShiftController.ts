@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { AuthenticatedRequest } from "../middleware/auth";
 import { AppDataSource } from "../data-source";
 import { Shift, ShiftStatus } from "../entity/Shift";
 import { User } from "../entity/User";
@@ -7,6 +8,7 @@ import { Between, In, IsNull } from "typeorm";
 import { ReturnRequest, ReturnStatus, RefundMethod, MpesaRefundStatus } from "../entity/ReturnRequest";
 import { CreditNote } from "../entity/CreditNote";
 import { MpesaTransaction } from "../entity/MpesaTransaction";
+import { getErrorMessage } from "../utils/errors";
 
 const shiftRepo = AppDataSource.getRepository(Shift);
 
@@ -21,10 +23,10 @@ export const sanitizeShiftCurrency = (value: unknown, fieldName: string) => {
 export class ShiftController {
     
     // Open Register
-    static async openShift(req: any, res: Response) {
+    static async openShift(req: AuthenticatedRequest, res: Response) {
         try {
             const { opening_float } = req.body;
-            const cashier = await AppDataSource.manager.findOneBy(User, { id: req.user.id });
+            const cashier = await AppDataSource.manager.findOneBy(User, { id: req.user!.id });
 
             if (!cashier) return res.status(401).json({ message: "Invalid user" });
 
@@ -42,7 +44,7 @@ export class ShiftController {
             await shiftRepo.save(shift);
 
             res.status(201).json(shift);
-        } catch (err: any) {
+        } catch (err) {
             const databaseCode = err && typeof err === "object" && "code" in err
                 ? err.code
                 : err && typeof err === "object" && "driverError" in err
@@ -52,15 +54,15 @@ export class ShiftController {
                 return res.status(409).json({ message: "You already have an open shift. Close it before opening a new one." });
             }
             console.error("Failed to open shift:", err);
-            res.status(400).json({ message: "Failed to open shift", error: err.message });
+            res.status(400).json({ message: "Failed to open shift", error: getErrorMessage(err, "Unknown error") });
         }
     }
 
     // Z-Report / Close Register
-    static async closeShift(req: any, res: Response) {
+    static async closeShift(req: AuthenticatedRequest, res: Response) {
         const queryRunner = AppDataSource.createQueryRunner();
         try {
-            const { id } = req.params;
+            const id = req.params.id;
             const { actual_cash, notes } = req.body;
             if (actual_cash === undefined || actual_cash === null ||
                 (typeof actual_cash === "string" && actual_cash.trim() === "")) {
@@ -84,7 +86,7 @@ export class ShiftController {
                 return res.status(400).json({ message: "Shift is already closed." });
             }
 
-            if (shift.cashier_id !== req.user.id && req.user.role !== "admin") {
+            if (shift.cashier_id !== req.user!.id && req.user!.role !== "admin") {
                 await queryRunner.rollbackTransaction();
                 return res.status(403).json({ message: "Not authorized to close this shift." });
             }
@@ -190,32 +192,32 @@ export class ShiftController {
                 shift
             });
 
-        } catch (err: any) {
+        } catch (err) {
             if (queryRunner.isTransactionActive) {
                 await queryRunner.rollbackTransaction();
             }
-            res.status(400).json({ message: "Failed to close shift", error: err.message });
+            res.status(400).json({ message: "Failed to close shift", error: getErrorMessage(err, "Unknown error") });
         } finally {
             await queryRunner.release();
         }
     }
 
-    static async getCurrentShift(req: any, res: Response) {
+    static async getCurrentShift(req: AuthenticatedRequest, res: Response) {
         try {
             const shift = await shiftRepo.findOne({
-                where: { cashier_id: req.user.id, status: ShiftStatus.OPEN },
+                where: { cashier_id: req.user!.id, status: ShiftStatus.OPEN },
                 relations: ["cashier"]
             });
             if (!shift) return res.status(404).json({ message: "No open shift found" });
             res.json(shift);
-        } catch (err: any) {
+        } catch (err) {
             res.status(400).json({ message: "Failed to fetch shift" });
         }
     }
 
-    static async getAllShifts(req: any, res: Response) {
+    static async getAllShifts(req: AuthenticatedRequest, res: Response) {
         try {
-            const whereClause = req.user.role === "admin" ? {} : { cashier_id: req.user.id };
+            const whereClause = req.user!.role === "admin" ? {} : { cashier_id: req.user!.id };
             const shifts = await shiftRepo.find({
                 where: whereClause,
                 relations: ["cashier"],
@@ -223,8 +225,8 @@ export class ShiftController {
                 take: 50 // Limit to last 50 shifts for performance
             });
             res.json(shifts);
-        } catch (err: any) {
-            res.status(400).json({ message: "Failed to fetch shifts", error: err.message });
+        } catch (err) {
+            res.status(400).json({ message: "Failed to fetch shifts", error: getErrorMessage(err, "Unknown error") });
         }
     }
 }

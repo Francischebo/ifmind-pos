@@ -66,7 +66,7 @@ export default function Customers() {
     try {
       const data = await ApiService.get<Customer[]>('/customers');
       setCustomers(data || []);
-    } catch (error: any) {
+    } catch (error) {
       toast.error('Failed to load customers: ' + error.message);
     }
   };
@@ -128,7 +128,7 @@ export default function Customers() {
       setFormData({ name: '', phone: '', email: '' });
       setEditingCustomer(null);
       loadCustomers();
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message);
     }
   };
@@ -149,7 +149,7 @@ export default function Customers() {
       await ApiService.delete(`/customers/${deleteCustomerId}`);
       toast.success('Customer deleted');
       loadCustomers();
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message);
     }
     setDeleteCustomerId(null);

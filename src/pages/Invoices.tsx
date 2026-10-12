@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -83,11 +83,7 @@ export default function Invoices() {
     reference_number: "",
   });
 
-  useEffect(() => {
-    loadInvoices();
-  }, [statusFilter]);
-
-  const loadInvoices = async () => {
+  const loadInvoices = useCallback(async () => {
     setLoading(true);
     setLoadError(null);
     try {
@@ -107,7 +103,11 @@ export default function Invoices() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [statusFilter]);
+
+  useEffect(() => {
+    void loadInvoices();
+  }, [loadInvoices]);
 
   const loadPayments = async (invoiceId: string) => {
     try {
@@ -159,8 +159,10 @@ export default function Invoices() {
         (invoice) => invoice.id === selectedInvoice.id,
       );
       if (updated) setSelectedInvoice(normalizeInvoice(updated));
-    } catch (error: any) {
-      toast.error("Failed to record payment: " + error.message);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "An unknown error occurred";
+      toast.error("Failed to record payment: " + message);
     }
   };
 

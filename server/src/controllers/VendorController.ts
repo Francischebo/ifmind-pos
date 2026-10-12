@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { AuthenticatedRequest } from "../middleware/auth";
 import { AppDataSource } from "../data-source";
 import { Vendor } from "../entity/Vendor";
 import { PurchaseOrder } from "../entity/PurchaseOrder";
@@ -15,10 +16,10 @@ const VENDOR_ALLOWED_FIELDS = new Set([
 
 export const sanitizeVendorPayload = (input: unknown) => {
     if (!input || typeof input !== "object" || Array.isArray(input)) {
-        return {} as Record<string, any>;
+        return {} as Partial<Vendor>;
     }
 
-    const sanitized: Record<string, any> = {};
+    const sanitized: Partial<Vendor> = {};
     for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
         if (!VENDOR_ALLOWED_FIELDS.has(key) || value === undefined || value === null) {
             continue;
@@ -27,7 +28,12 @@ export const sanitizeVendorPayload = (input: unknown) => {
         if (typeof value === "string") {
             const trimmed = value.trim();
             if (trimmed === "" && (key === "name" || key === "email" || key === "phone")) continue;
-            sanitized[key] = trimmed;
+            if (key === "name") sanitized.name = trimmed;
+            else if (key === "contact_person") sanitized.contact_person = trimmed;
+            else if (key === "phone") sanitized.phone = trimmed;
+            else if (key === "email") sanitized.email = trimmed;
+            else if (key === "address") sanitized.address = trimmed;
+            else if (key === "payment_terms") sanitized.payment_terms = trimmed;
         }
     }
 
@@ -35,7 +41,7 @@ export const sanitizeVendorPayload = (input: unknown) => {
 };
 
 export class VendorController {
-    static async getPortalData(req: any, res: Response) {
+    static async getPortalData(req: AuthenticatedRequest, res: Response) {
         try {
             const email = req.user?.email;
             if (!email) {

@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { AuthenticatedRequest } from "../middleware/auth";
 import { AppDataSource } from "../data-source";
 import { PurchaseOrder } from "../entity/PurchaseOrder";
 import { PoItem } from "../entity/PoItem";
@@ -171,7 +172,7 @@ export class PurchaseOrderController {
         }
     }
 
-    static async create(req: any, res: Response) {
+    static async create(req: AuthenticatedRequest, res: Response) {
         try {
             const actorId = req.user?.id;
             if (!actorId) {
@@ -180,7 +181,7 @@ export class PurchaseOrderController {
 
             const { vendor_id, warehouse_id, items } = sanitizePurchaseOrderCreatePayload(req.body ?? {});
             const calculatedTotal = items.reduce(
-                (sum: number, item: any) => sum + item.quantity * Number(item.unit_cost),
+                (sum, item) => sum + item.quantity * item.unit_cost,
                 0,
             );
             const poNumber = `PO-${Date.now()}`;
@@ -200,7 +201,7 @@ export class PurchaseOrderController {
                     status: "draft",
                 });
                 const savedPurchaseOrder = await manager.save(purchaseOrder);
-                await manager.save(PoItem, items.map((item: any) => manager.create(PoItem, {
+                await manager.save(PoItem, items.map((item) => manager.create(PoItem, {
                     po_id: savedPurchaseOrder.id,
                     product_id: item.product_id,
                     quantity: item.quantity,
@@ -268,7 +269,7 @@ export class PurchaseOrderController {
                 po.vendor.name,
                 po.po_number,
                 Number(po.total_amount),
-                (po.items || []).map((item: any) => ({
+                (po.items || []).map((item) => ({
                     productName: item.product?.name || "Unknown",
                     quantity: Number(item.quantity),
                     unitCost: Number(item.unit_cost),
@@ -312,7 +313,7 @@ export class PurchaseOrderController {
         }
     }
 
-    static async receive(req: any, res: Response) {
+    static async receive(req: AuthenticatedRequest, res: Response) {
         const queryRunner = AppDataSource.createQueryRunner();
 
         try {
@@ -365,7 +366,7 @@ export class PurchaseOrderController {
             }
 
             const requestedQuantitiesByPoItem = new Map<string, number>();
-            const items = requestItems.map((requestItem: any) => {
+            const items = requestItems.map((requestItem) => {
                 const poItem = po.items.find((item) => item.id === requestItem.po_item_id);
                 const receivingQuantity = Number(requestItem.receiving_quantity);
                 const rejectedQuantity = Number(requestItem.rejected_quantity || 0);
@@ -392,9 +393,9 @@ export class PurchaseOrderController {
                 };
             });
 
-            const totalItems = items.reduce((sum: number, i: any) => sum + i.receiving_quantity, 0);
-            const totalHandledItems = items.reduce((sum: number, i: any) => sum + i.receiving_quantity + i.rejected_quantity, 0);
-            const totalValue = items.reduce((sum: number, i: any) => sum + (i.receiving_quantity * i.unit_cost), 0);
+            const totalItems = items.reduce((sum, item) => sum + item.receiving_quantity, 0);
+            const totalHandledItems = items.reduce((sum, item) => sum + item.receiving_quantity + item.rejected_quantity, 0);
+            const totalValue = items.reduce((sum, item) => sum + item.receiving_quantity * item.unit_cost, 0);
             
             if (totalHandledItems === 0) {
                 await queryRunner.rollbackTransaction();
@@ -465,11 +466,11 @@ export class PurchaseOrderController {
                         product_id: requestItem.product_id,
                         po_id: po.id,
                         batch_number: requestItem.batch_number || `BATCH-${Date.now()}`,
-                        manufacturing_date: requestItem.manufacturing_date || null,
-                        expiry_date: requestItem.expiry_date || null,
-                        supplier_batch_reference: requestItem.supplier_batch_reference || null,
+                        manufacturing_date: requestItem.manufacturing_date ? new Date(requestItem.manufacturing_date) : undefined,
+                        expiry_date: requestItem.expiry_date ? new Date(requestItem.expiry_date) : undefined,
+                        supplier_batch_reference: requestItem.supplier_batch_reference || undefined,
                         quality_check_status: 'passed',
-                        environmental_conditions: requestItem.environmental_conditions || null,
+                        environmental_conditions: requestItem.environmental_conditions || undefined,
                         initial_quantity: requestItem.receiving_quantity,
                         current_quantity: requestItem.receiving_quantity,
                         unit_cost: requestItem.unit_cost

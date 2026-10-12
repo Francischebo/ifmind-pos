@@ -102,6 +102,9 @@ export class Sale {
     @CreateDateColumn()
     created_at: Date;
 
+    @Column({ type: "timestamptz", nullable: true })
+    offline_created_at: Date | null;
+
     @OneToMany(() => SaleItem, saleItem => saleItem.sale)
     items: SaleItem[];
 }

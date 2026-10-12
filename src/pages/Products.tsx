@@ -13,7 +13,7 @@ import {
   Upload,
   Loader2,
 } from "lucide-react";
-import { useAuth } from "@/hooks/useAuth";
+import { useAuth } from "@/hooks/useAuthContext";
 import { useToast } from "@/hooks/use-toast";
 import {
   Table,
@@ -97,11 +97,8 @@ export default function Products() {
 
   const downloadImportTemplate = async () => {
     try {
-      const token = localStorage.getItem("jwt_token");
       const response = await fetch(`${API_BASE_URL}/products/template`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        credentials: "include",
       });
 
       if (!response.ok) {
@@ -145,15 +142,12 @@ export default function Products() {
     setImportErrors([]);
 
     try {
-      const token = localStorage.getItem("jwt_token");
       const formData = new FormData();
       formData.append("file", file);
 
       const response = await fetch(`${API_BASE_URL}/products/import`, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        credentials: "include",
         body: formData,
       });
 

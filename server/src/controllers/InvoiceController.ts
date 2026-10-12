@@ -1,8 +1,10 @@
 import { Request, Response } from "express";
+import { AuthenticatedRequest } from "../middleware/auth";
 import { AppDataSource } from "../data-source";
 import { Invoice, InvoiceStatus } from "../entity/Invoice";
 import { InvoicePayment } from "../entity/InvoicePayment";
 import { AccountingService } from "../services/AccountingService";
+import { getErrorMessage } from "../utils/errors";
 
 const ALLOWED_PAYMENT_METHODS = new Set(["cash", "mpesa", "bank_transfer", "card", "credit", "store_credit"]);
 
@@ -67,7 +69,7 @@ export class InvoiceController {
         }
     }
 
-    static async recordPayment(req: any, res: Response) {
+    static async recordPayment(req: AuthenticatedRequest, res: Response) {
         const queryRunner = AppDataSource.createQueryRunner();
         await queryRunner.connect();
         await queryRunner.startTransaction();
@@ -117,10 +119,10 @@ export class InvoiceController {
 
             await queryRunner.commitTransaction();
             res.status(201).json({ message: "Payment recorded", payment, invoice });
-        } catch (error: any) {
+        } catch (error) {
             await queryRunner.rollbackTransaction();
             console.error("Error recording invoice payment:", error);
-            res.status(500).json({ message: error.message || "Error recording invoice payment" });
+            res.status(500).json({ message: getErrorMessage(error, "Error recording invoice payment") });
         } finally {
             await queryRunner.release();
         }

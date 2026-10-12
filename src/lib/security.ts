@@ -1,6 +1,6 @@
 // Security utilities for rate limiting, input validation, and enterprise security
 
-import { ApiService } from '@/lib/api';
+import { ApiRequestError, ApiService } from '@/lib/api';
 
 interface RateLimitEntry {
   count: number;
@@ -79,7 +79,14 @@ export const sanitizeInput = (input: string): string => {
     .slice(0, 255); // Limit length
 };
 
-export const validateProductData = (product: any): boolean => {
+interface ProductValidationInput {
+  name: string;
+  retail_price: number;
+  unit_cost: number;
+  sku: string;
+}
+
+export const validateProductData = (product: ProductValidationInput): boolean => {
   return (
     product.name &&
     product.name.length > 0 &&
@@ -93,7 +100,7 @@ export const validateProductData = (product: any): boolean => {
 };
 
 // Enhanced input validation with server-side validation schemas
-export const validateInputWithSchema = async (data: any, schemaType: string): Promise<boolean> => {
+export const validateInputWithSchema = async (data: unknown, schemaType: string): Promise<boolean> => {
   try {
     const result = await ApiService.post<{ valid: boolean }>('/auth/validate_input_data', {
       data,
@@ -101,17 +108,26 @@ export const validateInputWithSchema = async (data: any, schemaType: string): Pr
     });
 
     return result.valid;
-  } catch (error: any) {
+  } catch (error) {
     console.error('Input validation failed:', error);
-    await logApplicationError('validation_error', error.message, { schema_type: schemaType, data });
+    await logApplicationError(
+      'validation_error',
+      error instanceof Error ? error.message : 'Unknown validation error',
+      { schema_type: schemaType, data },
+    );
     return false;
   }
 };
 
-// Secure local storage wrapper with encryption
+// Multi-tab safe origin-isolated local storage wrapper using browser IndexedDB
+const SECURE_STORAGE_DB_NAME = 'cfi_pos_secure_storage';
+const SECURE_STORAGE_DB_VERSION = 1;
+const SECURE_STORAGE_STORE_NAME = 'keyval';
+
 export class SecureStorage {
   private static instance: SecureStorage;
-  private keyPromise: Promise<CryptoKey> | null = null;
+  private dbPromise: Promise<IDBDatabase> | null = null;
+  private memoryFallback = new Map<string, unknown>();
 
   static getInstance(): SecureStorage {
     if (!SecureStorage.instance) {
@@ -120,85 +136,120 @@ export class SecureStorage {
     return SecureStorage.instance;
   }
 
-  private getEncryptionKey(): Promise<CryptoKey> {
-    if (!this.keyPromise) {
-      this.keyPromise = (async () => {
-        const storedKey = sessionStorage.getItem('pos_session_key');
-        const material = storedKey || crypto.getRandomValues(new Uint8Array(32)).reduce((acc, x) => acc + x.toString(16).padStart(2, '0'), '');
-        if (!storedKey) {
-          sessionStorage.setItem('pos_session_key', material);
-        }
-
-        const keyBytes = new TextEncoder().encode(material.slice(0, 32));
-        return crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['encrypt', 'decrypt']);
-      })();
+  private getDb(): Promise<IDBDatabase> {
+    if (!this.dbPromise) {
+      if (typeof indexedDB === 'undefined') {
+        return Promise.reject(new Error('IndexedDB is not supported in this environment'));
+      }
+      this.dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open(SECURE_STORAGE_DB_NAME, SECURE_STORAGE_DB_VERSION);
+        request.onupgradeneeded = () => {
+          const db = request.result;
+          if (!db.objectStoreNames.contains(SECURE_STORAGE_STORE_NAME)) {
+            db.createObjectStore(SECURE_STORAGE_STORE_NAME);
+          }
+        };
+        request.onsuccess = () => {
+          // Clean up legacy per-tab session key if present
+          try {
+            sessionStorage.removeItem('pos_session_key');
+          } catch {
+            // Ignore access errors
+          }
+          resolve(request.result);
+        };
+        request.onerror = () => {
+          reject(request.error || new Error('Failed to open secure storage DB'));
+        };
+      });
     }
-    return this.keyPromise;
+    return this.dbPromise;
   }
 
-  async setItem(key: string, value: any): Promise<void> {
+  async setItem(key: string, value: unknown): Promise<void> {
     try {
-      const encrypted = await this.encryptData(JSON.stringify(value));
-      localStorage.setItem(key, encrypted);
-    } catch (error) {
-      console.error('Failed to store item securely:', error);
-      await logApplicationError('secure_storage_error', 'Failed to encrypt and store data', { key });
+      const db = await this.getDb();
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(SECURE_STORAGE_STORE_NAME, 'readwrite');
+        const store = tx.objectStore(SECURE_STORAGE_STORE_NAME);
+        const req = store.put(value, key);
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      });
+      this.memoryFallback.set(key, value);
+    } catch {
+      this.memoryFallback.set(key, value);
     }
   }
 
-  async getItem(key: string): Promise<any> {
+  async getItem<T = unknown>(key: string): Promise<T | null> {
     try {
-      const encrypted = localStorage.getItem(key);
-      if (!encrypted) return null;
-      const decrypted = await this.decryptData(encrypted);
-      return JSON.parse(decrypted);
-    } catch (error) {
-      console.error('Failed to retrieve item securely:', error);
-      await logApplicationError('secure_storage_error', 'Failed to decrypt and retrieve data', { key });
-      return null;
+      const db = await this.getDb();
+      const result = await new Promise<T | undefined>((resolve, reject) => {
+        const tx = db.transaction(SECURE_STORAGE_STORE_NAME, 'readonly');
+        const store = tx.objectStore(SECURE_STORAGE_STORE_NAME);
+        const req = store.get(key);
+        req.onsuccess = () => resolve(req.result as T | undefined);
+        req.onerror = () => reject(req.error);
+      });
+      if (result !== undefined) {
+        return result;
+      }
+      return (this.memoryFallback.get(key) as T) ?? null;
+    } catch {
+      return (this.memoryFallback.get(key) as T) ?? null;
     }
   }
 
-  removeItem(key: string): void {
-    localStorage.removeItem(key);
+  async removeItem(key: string): Promise<void> {
+    this.memoryFallback.delete(key);
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // Ignore
+    }
+    try {
+      const db = await this.getDb();
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(SECURE_STORAGE_STORE_NAME, 'readwrite');
+        const store = tx.objectStore(SECURE_STORAGE_STORE_NAME);
+        const req = store.delete(key);
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      });
+    } catch {
+      // Ignore
+    }
   }
 
-  clear(): void {
-    localStorage.clear();
-    sessionStorage.removeItem('pos_session_key');
-  }
-
-  private async encryptData(data: string): Promise<string> {
-    const encoder = new TextEncoder();
-    const dataBuffer = encoder.encode(data);
-    const key = await this.getEncryptionKey();
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const encrypted = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv },
-      key,
-      dataBuffer
-    );
-    return btoa(JSON.stringify({ iv: Array.from(iv), data: Array.from(new Uint8Array(encrypted)) }));
-  }
-
-  private async decryptData(encryptedData: string): Promise<string> {
-    const { iv, data } = JSON.parse(atob(encryptedData));
-    const key = await this.getEncryptionKey();
-    const decrypted = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: new Uint8Array(iv) },
-      key,
-      new Uint8Array(data)
-    );
-    return new TextDecoder().decode(decrypted);
+  async clear(): Promise<void> {
+    this.memoryFallback.clear();
+    try {
+      sessionStorage.removeItem('pos_session_key');
+    } catch {
+      // Ignore
+    }
+    try {
+      const db = await this.getDb();
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(SECURE_STORAGE_STORE_NAME, 'readwrite');
+        const store = tx.objectStore(SECURE_STORAGE_STORE_NAME);
+        const req = store.clear();
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      });
+    } catch {
+      // Ignore
+    }
   }
 }
 
 // API request wrapper with rate limiting and security
-export const secureApiCall = async (
-  apiCall: () => Promise<any>,
+export const secureApiCall = async <T>(
+  apiCall: () => Promise<T>,
   rateLimiter: RateLimiter,
   key: string = 'default'
-): Promise<any> => {
+): Promise<T> => {
   if (!rateLimiter.isAllowed(key)) {
     const remainingTime = rateLimiter.getRemainingTime(key);
     await logSecurityEvent('rate_limit_exceeded', 'API rate limit exceeded', 'medium', {
@@ -210,18 +261,19 @@ export const secureApiCall = async (
 
   try {
     return await apiCall();
-  } catch (error: any) {
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'API call failed';
     // Log the error securely
-    await logApplicationError('api_call_error', error.message || 'API call failed', {
+    await logApplicationError('api_call_error', message, {
       endpoint: key,
-      status: error.status
+      status: error instanceof ApiRequestError ? error.status : undefined
     });
 
     // Don't expose sensitive error details
-    if (error.message?.includes('JWT') || error.message?.includes('token')) {
+    if (message.includes('JWT') || message.includes('token')) {
       throw new Error('Authentication error. Please log in again.');
     }
-    if (error.message?.includes('permission') || error.message?.includes('unauthorized')) {
+    if (message.includes('permission') || message.includes('unauthorized')) {
       throw new Error('You do not have permission to perform this action.');
     }
     throw new Error('An error occurred. Please try again.');
@@ -232,11 +284,11 @@ export const secureApiCall = async (
 export const logApplicationError = async (
   errorType: string,
   errorMessage: string,
-  errorDetails?: any,
+  errorDetails?: unknown,
   severity: string = 'error',
   endpoint?: string,
   requestMethod?: string,
-  requestBody?: any,
+  requestBody?: unknown,
   stackTrace?: string
 ): Promise<void> => {
   try {
@@ -259,7 +311,7 @@ export const logSecurityEvent = async (
   eventType: string,
   description: string,
   riskLevel: string = 'low',
-  metadata?: any
+  metadata?: unknown
 ): Promise<void> => {
   try {
     await ApiService.post('/auth/log_security_event', {
@@ -286,78 +338,33 @@ export class PWASecurity {
   }
 
   async initialize(): Promise<void> {
-    if ('serviceWorker' in navigator) {
-      if (import.meta.env.DEV) {
-        // Enforce unregister in development to prevent Vite HMR caching issues causing refresh loops
-        try {
-          const registrations = await navigator.serviceWorker.getRegistrations();
-          for (const reg of registrations) {
-            await reg.unregister();
-          }
-          // Also clear caches in dev to break loops
-          const cacheKeys = await caches.keys();
-          for (const key of cacheKeys) {
-            await caches.delete(key);
-          }
-          console.log('[PWA] Service workers unregistered and caches cleared in development mode to prevent HMR loops.');
-        } catch(e) {
-          console.error('Failed to clear SW / Cache in dev', e);
-        }
-        return;
-      }
+    if (!("serviceWorker" in navigator) || import.meta.env.DEV) return;
 
-      try {
-        const registration = await navigator.serviceWorker.register('/sw.js', {
-          scope: '/'
-        });
-
-        registration.addEventListener('updatefound', () => {
-          const newWorker = registration.installing;
-          if (newWorker) {
-            newWorker.addEventListener('statechange', () => {
-              if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                // New version available
-                this.notifyUpdateAvailable();
-              }
-            });
-          }
-        });
-
-        this.serviceWorker = registration.active;
-
-        // Log PWA initialization
-        await ApiService.post('/auth/log_pwa_security_event', {
-          event_type: 'pwa_initialized',
-          description: 'PWA service worker initialized successfully',
-          sw_version: '1.0.0',
-          cache_status: 'active',
-          offline_capabilities: true
-        }).catch(() => {});
-
-      } catch (error: any) {
-        console.error('Service Worker registration failed:', error);
-        await logApplicationError('pwa_initialization_failed', 'Service Worker registration failed', { error: error.message });
-      }
-    }
+    const registration = await navigator.serviceWorker.getRegistration("/");
+    this.serviceWorker = registration?.active ?? navigator.serviceWorker.controller;
   }
 
   async validateCacheIntegrity(): Promise<boolean> {
     try {
       const result = await ApiService.post<{ valid: boolean }>('/auth/validate_pwa_cache_integrity', {
         cache_manifest: await this.getCacheManifest()
-      }).catch(() => ({ valid: true }));
+      });
 
-      return result.valid;
+      return Boolean(result?.valid);
     } catch (error) {
       console.error('Cache validation failed:', error);
+      await logApplicationError(
+        'pwa_cache_validation_error',
+        error instanceof Error ? error.message : 'PWA cache validation failed',
+      );
       return false;
     }
   }
 
-  private async getCacheManifest(): Promise<any> {
+  private async getCacheManifest(): Promise<Record<string, string[]>> {
     // Get current cache manifest for validation
     const cacheNames = await caches.keys();
-    const manifest = {};
+    const manifest: Record<string, string[]> = {};
 
     for (const cacheName of cacheNames) {
       const cache = await caches.open(cacheName);
@@ -482,12 +489,6 @@ export const initializeSecurity = async (): Promise<void> => {
     // Initialize session management
     const sessionManager = SessionManager.getInstance();
     await sessionManager.initializeSession();
-
-    // Validate cache integrity periodically
-    setInterval(async () => {
-      const pwaSecurity = PWASecurity.getInstance();
-      await pwaSecurity.validateCacheIntegrity();
-    }, 30 * 60 * 1000); // Every 30 minutes
 
     console.log('Security systems initialized successfully');
   } catch (error) {

@@ -1,94 +1,175 @@
 import {
-  createContext,
-  useContext,
   useEffect,
   useState,
   ReactNode,
+  useRef,
 } from "react";
-import { ApiService } from "@/lib/api";
+import { ApiNetworkError, ApiRequestError, ApiService } from "@/lib/api";
+import { OfflineQueueProvider } from "@/hooks/useOfflineQueue";
+import { AuthContext } from "@/hooks/auth-context";
 import { useNavigate } from "react-router-dom";
+import {
+  UserRole,
+  VaultUser,
+  clearOfflineVault,
+  readVerifiedOfflineUser,
+  storeVerifiedOfflineUser,
+} from "@/lib/offlineAuthVault";
 
-export type UserRole = "admin" | "cashier" | "supervisor" | "manager";
+export type { UserRole };
 
 export interface User {
   id: string;
   email: string;
   role: UserRole;
-  profile?: any;
+  profile?: Record<string, unknown>;
 }
 
-interface AuthContextType {
+type LoginResponse =
+  | { requires_otp: true; otp_token: string }
+  | { requires_otp: false; token: string; user: User };
+
+export interface AuthContextType {
   user: User | null;
   session: string | null;
   userRole: UserRole | null;
   loading: boolean;
+  isOfflineSession: boolean;
   signIn: (
     email: string,
     password: string,
-  ) => Promise<{ error: any; needsOtp?: boolean; otpToken?: string }>;
-  verifyOtp: (otpToken: string, code: string) => Promise<{ error: any }>;
+  ) => Promise<{ error: string | null; needsOtp?: boolean; otpToken?: string }>;
+  verifyOtp: (otpToken: string, code: string) => Promise<{ error: string | null }>;
   signUp: (
     email: string,
     password: string,
     fullName: string,
-  ) => Promise<{ error: any; needsOtp?: boolean; otpToken?: string }>;
+  ) => Promise<{ error: string | null; needsOtp?: boolean; otpToken?: string }>;
   signOut: () => Promise<void>;
   role: UserRole | null;
 }
-
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<string | null>(null);
   const [userRole, setUserRole] = useState<UserRole | null>(null);
   const [loading, setLoading] = useState(true);
+  const [isOfflineSession, setIsOfflineSession] = useState(false);
+  const [onlineVerified, setOnlineVerified] = useState(false);
   const navigate = useNavigate();
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
 
   useEffect(() => {
     const initAuth = async () => {
-      const token = localStorage.getItem("jwt_token");
-      if (token) {
-        try {
-          const userData = await ApiService.get<User>("/auth/me");
-          if (userData) {
-            setSession(token);
-            setUser(userData);
-            setUserRole(userData.role);
-          } else {
-            localStorage.removeItem("jwt_token");
-          }
-        } catch (error) {
-          console.error("Failed to restore session", error);
-          localStorage.removeItem("jwt_token");
+      setOnlineVerified(false);
+      try {
+        const userData = await ApiService.get<User>("/auth/me");
+        if (userData && userData.id) {
+          setSession("active");
+          setUser(userData);
+          setUserRole(userData.role);
+          setIsOfflineSession(false);
+          setOnlineVerified(true);
+          // Cryptographically seal the verified user snapshot
+          await storeVerifiedOfflineUser(userData);
+        } else {
+          clearOfflineVault();
+        }
+      } catch (error) {
+        const canContinueOffline =
+          error instanceof ApiNetworkError ||
+          (error instanceof ApiRequestError && error.status >= 500) ||
+          !navigator.onLine;
+
+        // Verify cryptographic signature of the cached user snapshot
+        const cachedUser: VaultUser | null = canContinueOffline
+          ? await readVerifiedOfflineUser()
+          : null;
+
+        if (cachedUser) {
+          setSession("offline");
+          setUser(cachedUser);
+          // STRICT SECURITY ENFORCEMENT:
+          // In offline mode, all sessions are strictly restricted to "cashier".
+          // Administrative and managerial elevations are never permitted offline.
+          setUserRole("cashier");
+          setIsOfflineSession(true);
+          navigateRef.current("/sales", { replace: true });
+        } else {
+          clearOfflineVault();
         }
       }
       setLoading(false);
     };
 
-    initAuth();
+    void initAuth();
   }, []);
+
+  useEffect(() => {
+    if (!isOfflineSession || !user) return;
+    let isChecking = false;
+
+    const verifyWhenAvailable = async () => {
+      if (isChecking || !navigator.onLine) return;
+      isChecking = true;
+      try {
+        const verifiedUser = await ApiService.get<User>("/auth/me");
+        if (verifiedUser.id !== user.id) {
+          throw new ApiRequestError("The saved offline cashier no longer matches the online session.", 401);
+        }
+        setUser(verifiedUser);
+        setUserRole(verifiedUser.role);
+        setSession("active");
+        setIsOfflineSession(false);
+        setOnlineVerified(true);
+        await storeVerifiedOfflineUser(verifiedUser);
+      } catch (error) {
+        if (error instanceof ApiRequestError && error.status === 401) {
+          clearOfflineVault();
+          setSession(null);
+          setUser(null);
+          setUserRole(null);
+          setIsOfflineSession(false);
+          setOnlineVerified(false);
+          navigate("/auth", { replace: true });
+        }
+      } finally {
+        isChecking = false;
+      }
+    };
+
+    window.addEventListener("online", verifyWhenAvailable);
+    const interval = window.setInterval(() => void verifyWhenAvailable(), 15_000);
+    void verifyWhenAvailable();
+    return () => {
+      window.removeEventListener("online", verifyWhenAvailable);
+      window.clearInterval(interval);
+    };
+  }, [isOfflineSession, navigate, user]);
 
   const signIn = async (email: string, password: string) => {
     try {
-      const data = await ApiService.post<any>("/auth/login", {
+      const data = await ApiService.post<LoginResponse>("/auth/login", {
         email,
         password,
       });
 
-      if (data.requires_otp) {
+      if (data.requires_otp === true) {
         return { error: null, needsOtp: true, otpToken: data.otp_token };
       }
 
-      localStorage.setItem("jwt_token", data.token);
-      setSession(data.token);
+      setSession("active");
       setUser(data.user);
       setUserRole(data.user.role);
+      setIsOfflineSession(false);
+      setOnlineVerified(true);
+      await storeVerifiedOfflineUser(data.user);
 
       navigate("/");
       return { error: null, needsOtp: false };
-    } catch (error: any) {
-      return { error: error.message || "Login failed" };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : "Login failed" };
     }
   };
 
@@ -99,15 +180,22 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         { otp_token: otpToken, code },
       );
 
-      localStorage.setItem("jwt_token", data.token);
-      setSession(data.token);
+      setSession("active");
       setUser(data.user);
       setUserRole(data.user.role);
+      setIsOfflineSession(false);
+      setOnlineVerified(true);
+      await storeVerifiedOfflineUser(data.user);
 
       navigate("/");
       return { error: null };
-    } catch (error: any) {
-      return { error: error.message || "OTP verification failed" };
+    } catch (error) {
+      return {
+        error:
+          error instanceof Error
+            ? error.message
+            : "OTP verification failed",
+      };
     }
   };
 
@@ -120,58 +208,73 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       });
 
       // Auto-login after registration (will trigger OTP flow)
-      const data = await ApiService.post<any>("/auth/login", {
+      const data = await ApiService.post<LoginResponse>("/auth/login", {
         email,
         password,
       });
 
-      if (data.requires_otp) {
+      if (data.requires_otp === true) {
         return { error: null, needsOtp: true, otpToken: data.otp_token };
       }
 
-      localStorage.setItem("jwt_token", data.token);
-      setSession(data.token);
+      setSession("active");
       setUser(data.user);
       setUserRole(data.user.role);
+      setIsOfflineSession(false);
+      setOnlineVerified(true);
+      await storeVerifiedOfflineUser(data.user);
 
       navigate("/");
       return { error: null, needsOtp: false };
-    } catch (error: any) {
-      return { error: error.message || "Registration failed" };
+    } catch (error) {
+      return {
+        error:
+          error instanceof Error ? error.message : "Registration failed",
+      };
     }
   };
 
   const signOut = async () => {
-    localStorage.removeItem("jwt_token");
+    try {
+      await ApiService.post("/auth/logout", {});
+    } catch {
+      // Ignore network errors during logout
+    }
+    clearOfflineVault();
     setSession(null);
     setUser(null);
     setUserRole(null);
+    setIsOfflineSession(false);
+    setOnlineVerified(false);
     navigate("/auth");
   };
+
+  // DEFENSE IN DEPTH: Force effective role to "cashier" in offline mode
+  const effectiveRole: UserRole | null = isOfflineSession ? "cashier" : userRole;
 
   return (
     <AuthContext.Provider
       value={{
         user,
         session,
-        userRole,
-        role: userRole,
+        userRole: effectiveRole,
+        role: effectiveRole,
         loading,
+        isOfflineSession,
         signIn,
         verifyOtp,
         signUp,
         signOut,
       }}
     >
-      {children}
+      <OfflineQueueProvider
+        userId={user?.id || null}
+        onlineVerified={onlineVerified}
+        offlineSession={isOfflineSession}
+      >
+        {children}
+      </OfflineQueueProvider>
     </AuthContext.Provider>
   );
 };
 
-export const useAuth = () => {
-  const context = useContext(AuthContext);
-  if (context === undefined) {
-    throw new Error("useAuth must be used within an AuthProvider");
-  }
-  return context;
-};

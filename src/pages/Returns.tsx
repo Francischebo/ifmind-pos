@@ -40,7 +40,7 @@ import {
   AlertTriangle,
   Eye,
 } from "lucide-react";
-import { useAuth } from "@/hooks/useAuth";
+import { useAuth } from "@/hooks/useAuthContext";
 import { Checkbox } from "@/components/ui/checkbox";
 
 interface ReturnItem {
@@ -78,8 +78,8 @@ interface Return {
     expires_at: string | null;
   } | null;
   sale?: Sale;
-  requested_by?: any;
-  approved_by?: any;
+  requested_by?: { id: string; email?: string; profile?: { full_name?: string } | null } | null;
+  approved_by?: { id: string; email?: string; profile?: { full_name?: string } | null } | null;
   items?: ReturnItem[];
 }
 
@@ -178,7 +178,7 @@ export default function Returns() {
       if (results.length === 0) {
         toast.info("No returnable sale found for that invoice number");
       }
-    } catch (error: any) {
+    } catch (error) {
       toast.error("Error searching invoice: " + error.message);
     } finally {
       setSearchingSales(false);
@@ -249,7 +249,7 @@ export default function Returns() {
     }
 
     try {
-      await ApiService.post<any>("/returns/request", {
+      await ApiService.post<Return>("/returns/request", {
         sale_id: selectedSale.id,
         reason: formData.reason,
         items: itemsPayload,
@@ -266,7 +266,7 @@ export default function Returns() {
         refund_method: "cash",
       });
       loadReturns();
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message || "Error creating return request");
     }
   };
@@ -289,7 +289,7 @@ export default function Returns() {
         condition: itemConditions[id],
       }));
 
-      const response: any = await ApiService.post(
+      const response: { storeCreditBarcode?: string; message?: string; mpesaRefundPending?: boolean } = await ApiService.post(
         "/admin/returns/approve/" + approvingReturn.id,
         {
           items_conditions: conditionsPayload,
@@ -309,7 +309,7 @@ export default function Returns() {
       setApprovalDialogOpen(false);
       setApprovingReturn(null);
       loadReturns();
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message || "Error approving return");
     }
   };
@@ -354,7 +354,7 @@ export default function Returns() {
       });
       toast.success("Return rejected");
       loadReturns();
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message || "Error rejecting return");
     }
   };
@@ -481,7 +481,8 @@ export default function Returns() {
 
                     <div className="space-y-2 max-h-48 overflow-y-auto pr-2">
                       {selectedSale.items?.map((item) => {
-                        const isSelected = selectedReturnItems.hasOwnProperty(
+                        const isSelected = Object.prototype.hasOwnProperty.call(
+                          selectedReturnItems,
                           item.id,
                         );
                         return (

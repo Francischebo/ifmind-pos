@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { AuthenticatedRequest, getJwtSecret } from "../middleware/auth";
 import { AppDataSource } from "../data-source";
 import { User, AppRole } from "../entity/User";
 import { Profile } from "../entity/Profile";
@@ -6,18 +7,13 @@ import * as bcrypt from "bcryptjs";
 import * as jwt from "jsonwebtoken";
 import { OtpCode } from "../entity/OtpCode";
 import { EmailService, shouldUseDevOtpFallback } from "../services/EmailService";
+import { getErrorMessage } from "../utils/errors";
+import { randomInt } from "node:crypto";
+import { KNOWN_DEFAULT_PASSWORDS } from "../services/AdminSetupService";
 
 const userRepository = AppDataSource.getRepository(User);
 const profileRepository = AppDataSource.getRepository(Profile);
 const otpRepository = AppDataSource.getRepository(OtpCode);
-
-const getJwtSecret = () => {
-    const jwtSecret = process.env.JWT_SECRET;
-    if (!jwtSecret) {
-        throw new Error("JWT_SECRET is not configured");
-    }
-    return jwtSecret;
-};
 
 const normalizeEmail = (value: unknown) => {
     if (typeof value !== "string") {
@@ -69,36 +65,111 @@ export const sanitizeAuthLoginPayload = (input: unknown) => {
     return { email, password };
 };
 
+export const sanitizeChangePasswordPayload = (input: unknown) => {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+        throw new Error("Payload must be an object");
+    }
+
+    const payload = input as Record<string, unknown>;
+    const current_password = typeof payload.current_password === "string" ? payload.current_password.trim() : "";
+    const new_password = typeof payload.new_password === "string" ? payload.new_password.trim() : "";
+
+    if (!current_password) {
+        throw new Error("current_password is required");
+    }
+
+    if (!new_password || new_password.length < 8 || new_password.length > 128) {
+        throw new Error("new_password must be between 8 and 128 characters long");
+    }
+
+    if (current_password === new_password) {
+        throw new Error("new_password must be different from current_password");
+    }
+
+    if (KNOWN_DEFAULT_PASSWORDS.has(new_password.toLowerCase())) {
+        throw new Error("new_password cannot be a known default development password");
+    }
+
+    return { current_password, new_password };
+};
+
+export const sanitizeLogEventPayload = (input: unknown) => {
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+        throw new Error("Log payload must be a JSON object");
+    }
+
+    const payload = input as Record<string, unknown>;
+
+    // Event/Error Type
+    let eventTypeRaw = payload.event_type !== undefined ? payload.event_type : payload.error_type;
+    if (eventTypeRaw === undefined || eventTypeRaw === null) {
+        eventTypeRaw = "generic_event";
+    }
+    if (typeof eventTypeRaw !== "string") {
+        throw new Error("Event or error type must be a string");
+    }
+    const event_type = eventTypeRaw.trim().slice(0, 100).replace(/[\r\n]+/g, " ");
+    if (!event_type) {
+        throw new Error("Event or error type cannot be empty");
+    }
+
+    // Message / Description
+    const messageRaw = payload.error_message || payload.description || payload.message || "";
+    if (typeof messageRaw !== "string") {
+        throw new Error("Log message must be a string");
+    }
+    const message = messageRaw.trim().slice(0, 1000).replace(/[\r\n]+/g, " ");
+
+    // Severity / Risk Level
+    const severityRaw = String(payload.severity || payload.risk_level || "info").trim().toLowerCase();
+    const allowedSeverities = new Set(["debug", "info", "warn", "warning", "error", "critical", "low", "medium", "high"]);
+    const severity = allowedSeverities.has(severityRaw) ? severityRaw : "info";
+
+    // Endpoint (optional)
+    const endpointRaw = typeof payload.endpoint === "string" ? payload.endpoint.trim().slice(0, 255) : undefined;
+    const endpoint = endpointRaw ? endpointRaw.replace(/[\r\n]+/g, "") : undefined;
+
+    // Request Method (optional)
+    const methodRaw = typeof payload.request_method === "string" ? payload.request_method.trim().toUpperCase().slice(0, 10) : undefined;
+    const allowedMethods = new Set(["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]);
+    const request_method = methodRaw && allowedMethods.has(methodRaw) ? methodRaw : undefined;
+
+    // Stack Trace (optional)
+    const stack_trace = typeof payload.stack_trace === "string" ? payload.stack_trace.trim().slice(0, 2000) : undefined;
+
+    // Additional Details / Metadata (strictly capped and sanitized)
+    let metadata: Record<string, unknown> | undefined;
+    const rawDetails = payload.error_details || payload.metadata;
+    if (rawDetails && typeof rawDetails === "object" && !Array.isArray(rawDetails)) {
+        try {
+            const serialized = JSON.stringify(rawDetails);
+            if (serialized.length <= 4096) {
+                metadata = JSON.parse(serialized);
+            }
+        } catch {
+            metadata = { warning: "Non-serializable log details were discarded" };
+        }
+    }
+
+    return {
+        event_type,
+        message,
+        severity,
+        endpoint,
+        request_method,
+        stack_trace,
+        metadata,
+    };
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+    typeof value === "object" && value !== null && !Array.isArray(value);
+
 export class AuthController {
     static async register(req: Request, res: Response) {
-        try {
-            const { email, password, full_name } = sanitizeAuthRegistrationPayload(req.body);
-            const existingUser = await userRepository.findOneBy({ email });
-            if (existingUser) {
-                return res.status(400).json({ message: "User already exists" });
-            }
-
-            const salt = await bcrypt.genSalt(10);
-            const password_hash = await bcrypt.hash(password, salt);
-
-            const user = new User();
-            user.email = email;
-            user.password_hash = password_hash;
-            user.role = AppRole.CASHIER;
-
-            await userRepository.save(user);
-
-            const profile = new Profile();
-            profile.user = user;
-            profile.full_name = full_name;
-
-            await profileRepository.save(profile);
-
-            res.status(201).json({ message: "User registered successfully" });
-        } catch (error: any) {
-            console.error(error);
-            return res.status(400).json({ message: error.message || "Validation failed" });
-        }
+        return res.status(403).json({
+            message: "Public self-registration is disabled. Staff and cashier accounts must be created by a system administrator."
+        });
     }
 
     static async login(req: Request, res: Response) {
@@ -127,7 +198,7 @@ export class AuthController {
             await otpRepository.update({ user_id: user.id }, { is_used: true });
 
             // Generate 6-digit OTP
-            const rawOtp = Math.floor(100000 + Math.random() * 900000).toString();
+            const rawOtp = randomInt(100000, 1000000).toString();
             const otpHash = await bcrypt.hash(rawOtp, 10);
 
             // Expiry: 10 minutes from now
@@ -143,7 +214,11 @@ export class AuthController {
             const otpSent = await EmailService.sendOtpEmail(user.email, rawOtp);
             if (!otpSent) {
                 await otpRepository.update({ id: otpObj.id }, { is_used: true });
-                return res.status(503).json({ message: "OTP delivery is unavailable" });
+                const configurationIssues = EmailService.getOtpEmailConfigurationIssues();
+                const message = configurationIssues.length > 0
+                    ? "OTP email delivery is not configured. Contact the system administrator, then try signing in again."
+                    : "The email provider could not accept the OTP. Contact the system administrator or try signing in again later.";
+                return res.status(503).json({ message });
             }
 
             // Issue temporary OTP token (not fully authorized)
@@ -153,13 +228,22 @@ export class AuthController {
                 { expiresIn: "10m" }
             );
 
-            const response = {
+            // Clear any preexisting session cookie so it cannot be used during OTP phase
+            const isProd = process.env.NODE_ENV === "production";
+            res.clearCookie("jwt_token", {
+                httpOnly: true,
+                secure: isProd,
+                sameSite: isProd ? "strict" : "lax",
+                path: "/",
+            });
+
+            const response: Record<string, unknown> = {
                 message: "OTP sent to email",
                 requires_otp: true,
                 otp_token: otpToken,
-            } as Record<string, unknown>;
+            };
 
-            if (process.env.NODE_ENV !== "production" || shouldUseDevOtpFallback()) {
+            if (process.env.NODE_ENV === "test" && shouldUseDevOtpFallback()) {
                 response.debug_otp = rawOtp;
             }
 
@@ -180,9 +264,13 @@ export class AuthController {
 
         try {
             // Verify temporary token
-            const decoded: any = jwt.verify(otpToken, getJwtSecret());
+            const decoded = jwt.verify(otpToken, getJwtSecret());
             
-            if (!decoded.is_otp_phase) {
+            if (
+                typeof decoded === "string" ||
+                decoded.is_otp_phase !== true ||
+                typeof decoded.id !== "string"
+            ) {
                 return res.status(401).json({ message: "Invalid token type" });
             }
 
@@ -231,17 +319,37 @@ export class AuthController {
                 { expiresIn: "1d" }
             );
 
+            const isProd = process.env.NODE_ENV === "production";
+            res.cookie("jwt_token", token, {
+                httpOnly: true,
+                secure: isProd,
+                sameSite: isProd ? "strict" : "lax",
+                maxAge: 24 * 60 * 60 * 1000, // 24 hours
+                path: "/",
+            });
+
             res.json({ token, user: { id: user.id, email: user.email, role: user.role } });
-        } catch (err: any) {
+        } catch (err) {
              console.error("OTP Verification Error:", err);
              res.status(401).json({ message: "Invalid or expired session" });
         }
     }
 
-    static async getProfile(req: any, res: Response) {
+    static async logout(_req: Request, res: Response) {
+        const isProd = process.env.NODE_ENV === "production";
+        res.clearCookie("jwt_token", {
+            httpOnly: true,
+            secure: isProd,
+            sameSite: isProd ? "strict" : "lax",
+            path: "/",
+        });
+        return res.json({ message: "Logged out successfully" });
+    }
+
+    static async getProfile(req: AuthenticatedRequest, res: Response) {
         try {
             const user = await userRepository.findOne({
-                where: { id: req.user.id },
+                where: { id: req.user!.id },
                 relations: ["profile"]
             });
             if (!user) {
@@ -259,33 +367,77 @@ export class AuthController {
         }
     }
 
+    static async changePassword(req: AuthenticatedRequest, res: Response) {
+        try {
+            if (!req.user?.id) {
+                return res.status(401).json({ message: "Authentication required" });
+            }
+
+            const { current_password, new_password } = sanitizeChangePasswordPayload(req.body);
+
+            const user = await userRepository.findOne({
+                where: { id: req.user.id }
+            });
+
+            if (!user) {
+                return res.status(404).json({ message: "User not found" });
+            }
+
+            const isMatch = await bcrypt.compare(current_password, user.password_hash);
+            if (!isMatch) {
+                return res.status(400).json({ message: "Current password is incorrect" });
+            }
+
+            const salt = await bcrypt.genSalt(10);
+            user.password_hash = await bcrypt.hash(new_password, salt);
+            await userRepository.save(user);
+
+            return res.json({ message: "Password updated successfully" });
+        } catch (error) {
+            console.error("Change password error:", error);
+            return res.status(400).json({ message: error instanceof Error ? error.message : "Failed to change password" });
+        }
+    }
+
     static async logEvent(req: Request, res: Response) {
-        // Dummy handler for frontend security logging
-        res.status(200).json({ status: "logged" });
+        try {
+            const sanitized = sanitizeLogEventPayload(req.body);
+            // Safely write to server log output without log injection risk
+            console.log(`[CLIENT AUDIT LOG] [${sanitized.severity.toUpperCase()}] ${sanitized.event_type}: ${sanitized.message}`);
+            return res.status(200).json({ status: "logged", timestamp: new Date().toISOString() });
+        } catch (error) {
+            return res.status(400).json({
+                status: "error",
+                message: error instanceof Error ? error.message : "Invalid log event payload",
+            });
+        }
     }
 
     static async validateData(req: Request, res: Response) {
         try {
             const { data, schemaType } = req.body || {};
-            if (!data || !schemaType) {
-                return res.status(400).json({ valid: false, message: "Validation input is missing" });
+            if (!data || !schemaType || typeof schemaType !== "string") {
+                return res.status(400).json({ valid: false, message: "Validation input is missing or invalid" });
             }
 
-            const schemaChecks: Record<string, (value: any) => boolean> = {
-                product: (value: any) => {
-                    if (!value || typeof value !== "object") return false;
+            const schemaChecks: Record<string, (value: unknown) => boolean> = {
+                product: (value) => {
+                    if (!isRecord(value)) return false;
 
-                    const nameOk = Boolean(value.name && String(value.name).trim().length > 0 && String(value.name).trim().length <= 100);
-                    const skuOk = Boolean(value.sku && String(value.sku).trim().length > 0 && String(value.sku).trim().length <= 50);
-                    const retailPriceOk = Number(value.retail_price) > 0;
-                    const unitCostOk = Number(value.unit_cost) > 0;
+                    const name = String(value.name ?? "").trim();
+                    const sku = String(value.sku ?? "").trim();
+                    const nameOk = name.length > 0 && name.length <= 100;
+                    const skuOk = sku.length > 0 && sku.length <= 50;
+                    const retailPriceOk = typeof value.retail_price === "number" && Number.isFinite(value.retail_price) && value.retail_price > 0 && value.retail_price <= 1000000;
+                    const unitCostOk = typeof value.unit_cost === "number" && Number.isFinite(value.unit_cost) && value.unit_cost > 0 && value.unit_cost <= 1000000;
 
                     return nameOk && skuOk && retailPriceOk && unitCostOk;
                 },
-                customer: (value: any) => {
-                    if (!value || typeof value !== "object") return false;
+                customer: (value) => {
+                    if (!isRecord(value)) return false;
 
-                    const nameOk = Boolean(value.name && String(value.name).trim().length > 0 && String(value.name).trim().length <= 100);
+                    const name = String(value.name ?? "").trim();
+                    const nameOk = name.length > 0 && name.length <= 100;
                     const emailOk = !value.email || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value.email));
                     const phoneOk = !value.phone || /^254[0-9]{9}$/.test(String(value.phone).replace(/\s+/g, ""));
 
@@ -297,10 +449,36 @@ export class AuthController {
             if (!validator) {
                 return res.status(400).json({ valid: false, message: "Unsupported schema type" });
             }
-            return res.status(200).json({ valid: Boolean(validator(data)) });
+            const isValid = Boolean(validator(data));
+            return res.status(isValid ? 200 : 422).json({ valid: isValid });
         } catch (error) {
-            console.error(error);
+            console.error("Data validation error:", error);
             return res.status(500).json({ valid: false, message: "Validation failed" });
+        }
+    }
+
+    static async validateCacheIntegrity(req: Request, res: Response) {
+        try {
+            const { cache_manifest } = req.body || {};
+            if (!cache_manifest || typeof cache_manifest !== "object" || Array.isArray(cache_manifest)) {
+                return res.status(400).json({ valid: false, message: "Cache manifest is missing or invalid" });
+            }
+
+            for (const [cacheName, urls] of Object.entries(cache_manifest)) {
+                if (typeof cacheName !== "string" || cacheName.length > 255 || !Array.isArray(urls)) {
+                    return res.status(400).json({ valid: false, message: "Invalid cache entries in manifest" });
+                }
+                for (const url of urls) {
+                    if (typeof url !== "string" || url.length > 2048) {
+                        return res.status(400).json({ valid: false, message: "Invalid resource URL in cache manifest" });
+                    }
+                }
+            }
+
+            return res.status(200).json({ valid: true });
+        } catch (error) {
+            console.error("PWA cache validation error:", error);
+            return res.status(500).json({ valid: false, message: "Cache validation failed" });
         }
     }
 }

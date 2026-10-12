@@ -1,10 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import * as jwt from "jsonwebtoken";
 import { strToU8, zipSync } from "fflate";
 import { verifyPesapalSignature } from "../lib/pesapal";
 import { sanitizeCategoryName } from "./CategoryController";
 import {
   getProductImportPersistenceError,
+  matchProductImportTaxClass,
   normalizeProductImportRow,
   parseProductImportFile,
   parseProductImportNumber,
@@ -17,9 +19,9 @@ import { sanitizeVendorPayload } from "./VendorController";
 import { sanitizeWarehousePayload } from "./WarehouseController";
 import { sanitizeSupplierInvoicePayload, sanitizeSupplierPaymentPayload, sanitizeRequisitionStatusPayload } from "./ProcurementController";
 import { sanitizeShiftCurrency } from "./ShiftController";
-import { sanitizeAuthRegistrationPayload, sanitizeAuthLoginPayload } from "./AuthController";
+import { sanitizeAuthRegistrationPayload, sanitizeAuthLoginPayload, sanitizeLogEventPayload } from "./AuthController";
 import { sanitizeInvoicePaymentPayload } from "./InvoiceController";
-import { sanitizeUserAdminUpdatePayload, sanitizeUserRolePayload } from "./UserAdminController";
+import { sanitizeUserAdminUpdatePayload, sanitizeUserRolePayload, sanitizeUserCreatePayload } from "./UserAdminController";
 import { sanitizeInventoryAdjustmentPayload, sanitizeInventoryTransferPayload, sanitizeTransferStatusPayload, sanitizeStockTakePayload } from "./InventoryController";
 import { sanitizeReturnRequestPayload, sanitizeApproveReturnPayload, sanitizeRejectReturnPayload, sanitizeMpesaRefundReceipt } from "./ReturnController";
 import { calculateCashChange, deriveSalePaymentMethod, sanitizeSalePayload, sanitizeVoidSalePayload, sanitizeParkedSalePayload } from "./SalesController";
@@ -30,8 +32,13 @@ import {
   hashMpesaCallbackToken,
   sanitizeMpesaStkPayload,
   verifyMpesaCallbackToken,
+  verifyMpesaC2bCallbackToken,
 } from "./PaymentController";
-import { shouldUseDevOtpFallback } from "../services/EmailService";
+import { escapeHtml, getOtpEmailConfigurationIssues, shouldUseDevOtpFallback } from "../services/EmailService";
+import { authenticateJWT } from "../middleware/auth";
+import { EtimsMockService, ETIMS_MOCK_DISCLAIMER } from "../services/EtimsMockService";
+import { PesapalMockService } from "../services/PesapalMockService";
+import { resolveAllowedCorsOrigins } from "../index";
 import { createInventoryPredictions, type DailySalesPoint } from "../services/InventoryPredictionService";
 import {
   DEFAULT_PRODUCT_UNIT_OF_MEASURES,
@@ -40,14 +47,25 @@ import {
   parseProductUnitOfMeasures,
 } from "../services/ProductCatalogSettings";
 
-test("development OTP fallback is enabled when email delivery is not configured", () => {
+test("development OTP fallback is gated by explicit flag and blocked in production", () => {
   const originalNodeEnv = process.env.NODE_ENV;
   const originalResendApiKey = process.env.RESEND_API_KEY;
+  const originalAllowFallback = process.env.ALLOW_DEV_OTP_FALLBACK;
 
   process.env.NODE_ENV = "development";
+  process.env.ALLOW_DEV_OTP_FALLBACK = "true";
   delete process.env.RESEND_API_KEY;
 
   assert.equal(shouldUseDevOtpFallback(), true);
+
+  // When flag is missing in development, fallback is false
+  delete process.env.ALLOW_DEV_OTP_FALLBACK;
+  assert.equal(shouldUseDevOtpFallback(), false);
+
+  // In production, fallback is ALWAYS false even if ALLOW_DEV_OTP_FALLBACK is set to true
+  process.env.NODE_ENV = "production";
+  process.env.ALLOW_DEV_OTP_FALLBACK = "true";
+  assert.equal(shouldUseDevOtpFallback(), false);
 
   if (originalNodeEnv === undefined) {
     delete process.env.NODE_ENV;
@@ -55,9 +73,30 @@ test("development OTP fallback is enabled when email delivery is not configured"
     process.env.NODE_ENV = originalNodeEnv;
   }
 
+  if (originalAllowFallback === undefined) {
+    delete process.env.ALLOW_DEV_OTP_FALLBACK;
+  } else {
+    process.env.ALLOW_DEV_OTP_FALLBACK = originalAllowFallback;
+  }
+
   if (originalResendApiKey) {
     process.env.RESEND_API_KEY = originalResendApiKey;
   }
+});
+
+test("OTP email configuration requires both the provider key and verified sender", () => {
+  assert.deepEqual(getOtpEmailConfigurationIssues({}), [
+    "RESEND_API_KEY is missing",
+    "RESEND_FROM_EMAIL is missing",
+  ]);
+  assert.deepEqual(getOtpEmailConfigurationIssues({
+    RESEND_API_KEY: "configured-test-key",
+    RESEND_FROM_EMAIL: "   ",
+  }), ["RESEND_FROM_EMAIL is missing"]);
+  assert.deepEqual(getOtpEmailConfigurationIssues({
+    RESEND_API_KEY: "configured-test-key",
+    RESEND_FROM_EMAIL: "pos@example.test",
+  }), []);
 });
 
 test("local frontend origins should include the active dev ports used by Vite", () => {
@@ -67,7 +106,24 @@ test("local frontend origins should include the active dev ports used by Vite", 
   assert.ok(allowedOrigins.includes("http://127.0.0.1:4173"), "127.0.0.1:4173 should be allowed");
 });
 
-test("verifyPesapalSignature rejects unsigned payloads", () => {
+test("resolveAllowedCorsOrigins isolates production to explicitly configured origins only", () => {
+  // In production, default localhost origins must NOT be included
+  const prodOrigins = resolveAllowedCorsOrigins("production", "https://pos.store.com", "https://app.store.com");
+  assert.deepEqual(prodOrigins, ["https://pos.store.com", "https://app.store.com"]);
+  assert.equal(prodOrigins.some((o) => o.includes("localhost") || o.includes("127.0.0.1")), false);
+
+  // In production, empty configuration returns empty array
+  const emptyProd = resolveAllowedCorsOrigins("production", "", "");
+  assert.deepEqual(emptyProd, []);
+
+  // In development, default localhost origins are permitted
+  const devOrigins = resolveAllowedCorsOrigins("development", "http://custom-dev:3000", "");
+  assert.ok(devOrigins.includes("http://localhost:5173"));
+  assert.ok(devOrigins.includes("http://localhost:8080"));
+  assert.ok(devOrigins.includes("http://custom-dev:3000"));
+});
+
+test("verifyPesapalSignature rejects unsigned payloads and missing secret", () => {
   process.env.PESAPAL_IPN_SECRET = "test-secret";
 
   const payload = {
@@ -78,9 +134,15 @@ test("verifyPesapalSignature rejects unsigned payloads", () => {
 
   assert.equal(verifyPesapalSignature(payload, "bad-signature"), false);
   assert.equal(verifyPesapalSignature(payload), false);
+  assert.equal(verifyPesapalSignature(null, "some-sig"), false);
+
+  delete process.env.PESAPAL_IPN_SECRET;
+  delete process.env.PESAPAL_SECRET;
+  delete process.env.PESAPAL_API_SECRET;
+  assert.equal(verifyPesapalSignature(payload, "e83820fc36f985d925cbe3000e43035551bd9ca1d0c159827da0c6699acc0018"), false);
 });
 
-test("verifyPesapalSignature accepts a valid HMAC signature", () => {
+test("verifyPesapalSignature accepts a valid HMAC signature over canonical payload and raw body", () => {
   process.env.PESAPAL_IPN_SECRET = "test-secret";
 
   const payload = {
@@ -91,6 +153,10 @@ test("verifyPesapalSignature accepts a valid HMAC signature", () => {
 
   const signature = "e83820fc36f985d925cbe3000e43035551bd9ca1d0c159827da0c6699acc0018";
   assert.equal(verifyPesapalSignature(payload, signature), true);
+
+  const rawBody = Buffer.from(JSON.stringify(payload));
+  const rawHmac = require("crypto").createHmac("sha256", "test-secret").update(rawBody).digest("hex");
+  assert.equal(verifyPesapalSignature(payload, rawHmac, rawBody), true);
 });
 
 test("M-Pesa callback token hashes reject missing and altered tokens", () => {
@@ -100,6 +166,14 @@ test("M-Pesa callback token hashes reject missing and altered tokens", () => {
   assert.equal(verifyMpesaCallbackToken(callbackToken, callbackTokenHash), true);
   assert.equal(verifyMpesaCallbackToken("altered-token", callbackTokenHash), false);
   assert.equal(verifyMpesaCallbackToken(callbackToken, null), false);
+});
+
+test("M-Pesa C2B callback token verification enforces valid constant-time token comparison", () => {
+  const expectedSecret = "a".repeat(64);
+  assert.equal(verifyMpesaC2bCallbackToken(expectedSecret, expectedSecret), true);
+  assert.equal(verifyMpesaC2bCallbackToken("wrong-token", expectedSecret), false);
+  assert.equal(verifyMpesaC2bCallbackToken("", expectedSecret), false);
+  assert.equal(verifyMpesaC2bCallbackToken(expectedSecret, undefined), false);
 });
 
 test("M-Pesa STK setup accepts a saved Till and server credentials with a public callback", () => {
@@ -281,6 +355,94 @@ test("product import selects the configured main warehouse for opening stock whe
   assert.equal(selectProductImportWarehouse(" overflow ", 5, warehouses)?.name, "Overflow");
   assert.equal(selectProductImportWarehouse("", 0, warehouses), undefined);
   assert.equal(selectProductImportWarehouse("", 5, []), undefined);
+});
+
+test("matchProductImportTaxClass matches standard tax types, percentages, KRA codes, and aliases", () => {
+  const standard16 = { id: "1", name: "Standard VAT 16%", rate: 16.0, is_default: true } as any;
+  const zeroRated0 = { id: "2", name: "Zero Rated 0%", rate: 0.0, is_default: false } as any;
+  const exempt0 = { id: "3", name: "Exempt 0%", rate: 0.0, is_default: false } as any;
+  const special8 = { id: "4", name: "Special Rate 8%", rate: 8.0, is_default: false } as any;
+  const tourism2 = { id: "5", name: "Tourism Levy 2%", rate: 2.0, is_default: false } as any;
+
+  const taxClasses = [standard16, zeroRated0, exempt0, special8, tourism2];
+
+  // 16% standard VAT variations
+  assert.equal(matchProductImportTaxClass({ taxClassName: "16%" }, taxClasses)?.id, "1");
+  assert.equal(matchProductImportTaxClass({ taxClassName: "16" }, taxClasses)?.id, "1");
+  assert.equal(matchProductImportTaxClass({ taxClassName: "VAT 16%" }, taxClasses)?.id, "1");
+  assert.equal(matchProductImportTaxClass({ taxClassName: "Standard VAT" }, taxClasses)?.id, "1");
+  assert.equal(matchProductImportTaxClass({ taxClassName: "Standard" }, taxClasses)?.id, "1");
+  assert.equal(matchProductImportTaxClass({ taxClassName: "VAT" }, taxClasses)?.id, "1");
+  assert.equal(matchProductImportTaxClass({ taxClassName: "B" }, taxClasses)?.id, "1");
+  assert.equal(matchProductImportTaxClass({ taxClassName: "B - 16%" }, taxClasses)?.id, "1");
+
+  // Zero rated variations
+  assert.equal(matchProductImportTaxClass({ taxClassName: "Zero Rated" }, taxClasses)?.id, "2");
+  assert.equal(matchProductImportTaxClass({ taxClassName: "Zero-rated" }, taxClasses)?.id, "2");
+  assert.equal(matchProductImportTaxClass({ taxClassName: "Zero" }, taxClasses)?.id, "2");
+  assert.equal(matchProductImportTaxClass({ taxClassName: "0%" }, taxClasses)?.id, "2");
+  assert.equal(matchProductImportTaxClass({ taxClassName: "0" }, taxClasses)?.id, "2");
+  assert.equal(matchProductImportTaxClass({ taxClassName: "C" }, taxClasses)?.id, "2");
+  assert.equal(matchProductImportTaxClass({ taxClassName: "C - 0%" }, taxClasses)?.id, "2");
+
+  // Exempt variations
+  assert.equal(matchProductImportTaxClass({ taxClassName: "Exempt" }, taxClasses)?.id, "3");
+  assert.equal(matchProductImportTaxClass({ taxClassName: "Tax Exempt" }, taxClasses)?.id, "3");
+  assert.equal(matchProductImportTaxClass({ taxClassName: "A" }, taxClasses)?.id, "3");
+  assert.equal(matchProductImportTaxClass({ taxClassName: "A - Exempt" }, taxClasses)?.id, "3");
+
+  // Special 8% variations
+  assert.equal(matchProductImportTaxClass({ taxClassName: "8%" }, taxClasses)?.id, "4");
+  assert.equal(matchProductImportTaxClass({ taxClassName: "8" }, taxClasses)?.id, "4");
+  assert.equal(matchProductImportTaxClass({ taxClassName: "E" }, taxClasses)?.id, "4");
+  assert.equal(matchProductImportTaxClass({ taxClassName: "Special Rate 8%" }, taxClasses)?.id, "4");
+
+  // Custom tax class rate matching
+  assert.equal(matchProductImportTaxClass({ taxClassName: "Tourism Levy" }, taxClasses)?.id, "5");
+  assert.equal(matchProductImportTaxClass({ taxClassName: "2%" }, taxClasses)?.id, "5");
+
+  // Empty tax class name falls back to default tax class or raw rate
+  assert.equal(matchProductImportTaxClass({ taxClassName: "" }, taxClasses)?.id, "1");
+  assert.equal(matchProductImportTaxClass({ taxClassName: "", taxRate: "0" }, taxClasses)?.id, "2");
+  assert.equal(matchProductImportTaxClass({ taxClassName: "", taxRate: 8 }, taxClasses)?.id, "4");
+});
+
+test("normalizeProductImportRow recognizes diverse tax and vat column headers", () => {
+  const rowWithTaxType = normalizeProductImportRow({
+    SKU: "SKU-TAX-1",
+    Name: "Sugar",
+    "Tax Type": "16%",
+    "unit_cost": "100",
+    "retail_price": "140",
+  });
+  assert.equal(rowWithTaxType.tax_class_name, "16%");
+
+  const rowWithTax = normalizeProductImportRow({
+    SKU: "SKU-TAX-2",
+    Name: "Salt",
+    "Tax": "Zero Rated",
+    "unit_cost": "20",
+    "retail_price": "30",
+  });
+  assert.equal(rowWithTax.tax_class_name, "Zero Rated");
+
+  const rowWithVat = normalizeProductImportRow({
+    SKU: "SKU-TAX-3",
+    Name: "Bread",
+    "VAT": "Exempt",
+    "unit_cost": "50",
+    "retail_price": "65",
+  });
+  assert.equal(rowWithVat.tax_class_name, "Exempt");
+
+  const rowWithKraTax = normalizeProductImportRow({
+    SKU: "SKU-TAX-4",
+    Name: "Milk",
+    "KRA Tax Type": "B - 16%",
+    "unit_cost": "50",
+    "retail_price": "70",
+  });
+  assert.equal(rowWithKraTax.tax_class_name, "B - 16%");
 });
 
 test("product import maps database constraint failures to useful row messages", () => {
@@ -561,6 +723,43 @@ test("sanitizeAuthLoginPayload requires normalized credentials", () => {
   assert.throws(() => sanitizeAuthLoginPayload({ email: "user@example.com", password: "" }), /password/i);
 });
 
+test("sanitizeLogEventPayload validates, sanitizes, and prevents log injection", () => {
+  assert.throws(() => sanitizeLogEventPayload(null), /must be a JSON object/i);
+  assert.throws(() => sanitizeLogEventPayload("invalid"), /must be a JSON object/i);
+  assert.throws(() => sanitizeLogEventPayload([]), /must be a JSON object/i);
+
+  // Normalizes error_type and description, strips newlines (log injection protection)
+  const result = sanitizeLogEventPayload({
+    error_type: "NETWORK_ERROR\r\nINJECTED_LOG_LINE",
+    description: "Failed to connect to backend\nSecond line",
+    severity: "warning",
+    endpoint: "/api/sales\r\n",
+    request_method: "post",
+    error_details: { code: 500, retry: false },
+  });
+
+  assert.equal(result.event_type, "NETWORK_ERROR INJECTED_LOG_LINE");
+  assert.equal(result.message, "Failed to connect to backend Second line");
+  assert.equal(result.severity, "warning");
+  assert.equal(result.endpoint, "/api/sales");
+  assert.equal(result.request_method, "POST");
+  assert.deepEqual(result.metadata, { code: 500, retry: false });
+
+  // Normalizes risk_level to severity and event_type to event_type
+  const securityEvent = sanitizeLogEventPayload({
+    event_type: "auth_failure",
+    error_message: "Invalid OTP entered",
+    risk_level: "HIGH",
+  });
+  assert.equal(securityEvent.event_type, "auth_failure");
+  assert.equal(securityEvent.message, "Invalid OTP entered");
+  assert.equal(securityEvent.severity, "high");
+
+  // Rejects invalid types
+  assert.throws(() => sanitizeLogEventPayload({ error_type: 123 }), /must be a string/i);
+  assert.throws(() => sanitizeLogEventPayload({ error_type: "" }), /cannot be empty/i);
+});
+
 test("sanitizeInvoicePaymentPayload only accepts valid invoice payment fields", () => {
   assert.deepEqual(
     sanitizeInvoicePaymentPayload({
@@ -733,6 +932,47 @@ test("sanitizeSalePayload and sanitizeVoidSalePayload enforce trusted sale field
   assert.deepEqual(
     sanitizeSalePayload({
       items: [{ product_id: "prod-1", quantity: 1 }],
+      payment_method: "cash",
+      cash_amount: 100,
+      idempotency_key: "offline-key-123",
+      expected_total_amount: 100,
+      offline_created_at: "2026-01-02T03:04:05.000Z",
+    }),
+    {
+      items: [{ product_id: "prod-1", quantity: 1 }],
+      payment_method: "cash",
+      cash_amount: 100,
+      idempotency_key: "offline-key-123",
+      expected_total_amount: 100,
+      offline_created_at: new Date("2026-01-02T03:04:05.000Z"),
+    },
+  );
+  assert.throws(
+    () => sanitizeSalePayload({
+      items: [{ product_id: "prod-1", quantity: 1 }],
+      offline_created_at: "2026-01-02T03:04:05.000Z",
+    }),
+    /both offline_created_at and expected_total_amount/i,
+  );
+  assert.throws(
+    () => sanitizeSalePayload({
+      items: [{ product_id: "prod-1", quantity: 1 }],
+      expected_total_amount: 100,
+    }),
+    /both offline_created_at and expected_total_amount/i,
+  );
+  assert.throws(
+    () => sanitizeSalePayload({
+      items: [{ product_id: "prod-1", quantity: 1 }],
+      expected_total_amount: 100,
+      offline_created_at: "2026-01-02T03:04:05.000Z",
+    }),
+    /offline sales require an idempotency_key/i,
+  );
+
+  assert.deepEqual(
+    sanitizeSalePayload({
+      items: [{ product_id: "prod-1", quantity: 1 }],
       customer_id: null,
       warehouse_id: "warehouse-1",
       store_credit_barcode: null,
@@ -781,7 +1021,44 @@ test("sanitizeUserRolePayload, sanitizeTransferStatusPayload and sanitizeStockTa
 
   assert.throws(() => sanitizeUserRolePayload({ role: "hacker" }), /role/i);
   assert.throws(() => sanitizeTransferStatusPayload({ status: "fake" }), /status/i);
-  assert.throws(() => sanitizeStockTakePayload({ warehouse_id: "", notes: 123 as any }), /warehouse_id|notes/i);
+  assert.throws(() => sanitizeStockTakePayload({ warehouse_id: "", notes: 123 }), /warehouse_id|notes/i);
+});
+
+test("sanitizeUserCreatePayload validates admin-provisioned user creation", () => {
+  assert.deepEqual(
+    sanitizeUserCreatePayload({
+      email: "  CASHIER1@example.com  ",
+      password: "StrongPassword123!",
+      full_name: "  Jane Doe  ",
+      role: "cashier",
+      extra: "drop",
+    }),
+    {
+      email: "cashier1@example.com",
+      password: "StrongPassword123!",
+      full_name: "Jane Doe",
+      role: "cashier",
+    }
+  );
+
+  assert.deepEqual(
+    sanitizeUserCreatePayload({
+      email: "supervisor@example.com",
+      password: "ValidPass1234",
+      full_name: "John Supervisor",
+    }),
+    {
+      email: "supervisor@example.com",
+      password: "ValidPass1234",
+      full_name: "John Supervisor",
+      role: "cashier",
+    }
+  );
+
+  assert.throws(() => sanitizeUserCreatePayload({ email: "bad-email", password: "12345678", full_name: "Test" }), /email/i);
+  assert.throws(() => sanitizeUserCreatePayload({ email: "test@example.com", password: "short", full_name: "Test" }), /password/i);
+  assert.throws(() => sanitizeUserCreatePayload({ email: "test@example.com", password: "validPassword123", full_name: "" }), /full_name/i);
+  assert.throws(() => sanitizeUserCreatePayload({ email: "test@example.com", password: "validPassword123", full_name: "Test", role: "superadmin" }), /role/i);
 });
 
 test("sanitizeParkedSalePayload and sanitizeRequisitionStatusPayload validate remaining direct-write payloads", () => {
@@ -921,3 +1198,139 @@ test("sanitizeMpesaStkPayload rejects unsafe values and normalizes valid ones", 
     /store_credit_barcode/i,
   );
 });
+
+test("WebSocket and JWT authentication reject unverified OTP 2FA challenge tokens", () => {
+  const secret = process.env.JWT_SECRET || "default_test_jwt_secret_which_is_long_enough_123456";
+  process.env.JWT_SECRET = secret;
+
+  const otpChallengeToken = jwt.sign(
+    { id: "user-123", email: "cashier@store.local", is_otp_phase: true },
+    secret,
+    { expiresIn: "10m" }
+  );
+
+  const fullyAuthenticatedToken = jwt.sign(
+    { id: "user-123", email: "cashier@store.local", role: "cashier" },
+    secret,
+    { expiresIn: "1d" }
+  );
+
+  const validateWsToken = (token?: string) => {
+    if (!token) throw new Error("Authentication error: No token provided");
+    const decoded = jwt.verify(token, secret) as jwt.JwtPayload;
+    if (
+      !decoded ||
+      typeof decoded !== "object" ||
+      typeof decoded.id !== "string" ||
+      decoded.is_otp_phase === true ||
+      !decoded.role ||
+      typeof decoded.role !== "string"
+    ) {
+      throw new Error("Authentication error: Full authentication required");
+    }
+    return decoded;
+  };
+
+  // 1. Missing token
+  assert.throws(() => validateWsToken(undefined), /No token provided/i);
+
+  // 2. Unverified 2FA / OTP token must be strictly rejected
+  assert.throws(() => validateWsToken(otpChallengeToken), /Full authentication required/i);
+
+  // 3. Token without role must be rejected
+  const tokenWithoutRole = jwt.sign({ id: "user-123", email: "test@pos.local" }, secret);
+  assert.throws(() => validateWsToken(tokenWithoutRole), /Full authentication required/i);
+
+  // 4. Token with is_otp_phase: true even if role is injected must be rejected
+  const forgedOtpTokenWithRole = jwt.sign(
+    { id: "user-123", email: "test@pos.local", role: "admin", is_otp_phase: true },
+    secret
+  );
+  assert.throws(() => validateWsToken(forgedOtpTokenWithRole), /Full authentication required/i);
+
+  // 5. Valid fully authenticated session passes
+  const validDecoded = validateWsToken(fullyAuthenticatedToken);
+  assert.equal(validDecoded.id, "user-123");
+  assert.equal(validDecoded.role, "cashier");
+  assert.equal(validDecoded.is_otp_phase, undefined);
+});
+
+test("escapeHtml prevents HTML injection in outgoing email templates", () => {
+  const payload = '<a href="https://attacker-phishing-site.com">Click here to verify banking details</a>';
+  const escaped = escapeHtml(payload);
+  assert.equal(escaped.includes("<a href="), false);
+  assert.equal(escaped.includes("&lt;a href=&quot;"), true);
+  assert.equal(escaped.includes("&gt;"), true);
+
+  // Escapes &, <, >, ', "
+  assert.equal(escapeHtml(`Tom & Jerry's "Bakery"`), "Tom &amp; Jerry&#39;s &quot;Bakery&quot;");
+  assert.equal(escapeHtml("<script>alert(1)</script>"), "&lt;script&gt;alert(1)&lt;/script&gt;");
+
+  // Non-string handling
+  assert.equal(escapeHtml(null), "");
+  assert.equal(escapeHtml(undefined), "");
+  assert.equal(escapeHtml(123), "");
+});
+
+test("authenticateJWT middleware explicitly returns 401 when token has is_otp_phase: true", () => {
+  const secret = process.env.JWT_SECRET || "default_test_jwt_secret_which_is_long_enough_123456";
+  process.env.JWT_SECRET = secret;
+
+  // Even if role: "admin" is present in the OTP token, it must be explicitly rejected
+  const otpTokenWithRole = jwt.sign(
+    { id: "user-999", email: "admin@store.local", role: "admin", is_otp_phase: true },
+    secret
+  );
+
+  let statusSent: number | undefined;
+  let jsonSent: unknown;
+  const mockReq: any = {
+    headers: {
+      authorization: `Bearer ${otpTokenWithRole}`,
+    },
+  };
+  const mockRes: any = {
+    status(code: number) {
+      statusSent = code;
+      return this;
+    },
+    json(payload: unknown) {
+      jsonSent = payload;
+      return this;
+    },
+    sendStatus(code: number) {
+      statusSent = code;
+      return this;
+    },
+  };
+  let nextCalled = false;
+  const nextFn = () => {
+    nextCalled = true;
+  };
+
+  authenticateJWT(mockReq, mockRes, nextFn);
+
+  assert.equal(nextCalled, false);
+  assert.equal(statusSent, 401);
+  assert.deepEqual(jsonSent, { message: "Two-factor authentication must be completed." });
+});
+
+test("EtimsMockService signs invoices with prominent test disclaimers and test prefixes", async () => {
+  const dummySale: any = { id: "test-sale-123" };
+  const result = await EtimsMockService.signInvoice(dummySale);
+
+  assert.equal(result.is_mock, true);
+  assert.equal(result.disclaimer, ETIMS_MOCK_DISCLAIMER);
+  assert.equal(result.receipt_no.startsWith("TEST-ETIMS-"), true);
+  assert.equal(result.signature.startsWith("TEST-SIG-"), true);
+  assert.equal(result.qr_code.includes("mock=true"), true);
+});
+
+test("PesapalMockService prefixes mock tracking IDs and identifies mock state", async () => {
+  const result = await PesapalMockService.requestPayment("sale-123", 500, "0712345678");
+
+  assert.equal(result.is_mock, true);
+  assert.equal(result.tracking_id.startsWith("TEST-PESA-"), true);
+  assert.equal(result.redirect_url.includes("mock=true"), true);
+});
+

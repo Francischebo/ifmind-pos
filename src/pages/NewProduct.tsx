@@ -68,7 +68,14 @@ export default function NewProduct() {
   const [options, setOptions] = useState<VariantOption[]>([
     { name: "", values: "" },
   ]);
-  const [generatedVariants, setGeneratedVariants] = useState<any[]>([]);
+  const [generatedVariants, setGeneratedVariants] = useState<Array<{
+    sku: string;
+    barcode: string;
+    variant_attributes: Record<string, string>;
+    retail_price: string;
+    unit_cost: string;
+    stock_on_hand: string;
+  }>>([]);
 
   const [formData, setFormData] = useState({
     sku: "",
@@ -110,7 +117,7 @@ export default function NewProduct() {
         activeWarehouses.find((warehouse) => warehouse.is_main) ||
         activeWarehouses[0];
       if (defaultWarehouse) setWarehouseId(defaultWarehouse.id);
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message || "Failed to load warehouses");
     }
   };
@@ -179,7 +186,25 @@ export default function NewProduct() {
     setLoading(true);
 
     try {
-      const productData: any = {
+      const productData: {
+        name: string;
+        sku: string;
+        barcode: string;
+        unit_cost: number;
+        retail_price: number;
+        stock_on_hand: number;
+        reorder_level: number;
+        tax_class_id: string | null;
+        warehouse_id?: string;
+        variants?: Array<{
+          sku: string;
+          barcode: string;
+          variant_attributes: Record<string, string>;
+          unit_cost: number;
+          retail_price: number;
+          stock_on_hand: number;
+        }>;
+      } = {
         name: formData.name,
         sku: formData.sku,
         barcode: formData.barcode || formData.sku,
@@ -209,7 +234,7 @@ export default function NewProduct() {
       setCreatedProduct("parent" in response ? response.parent : response);
       setShowBarcode(true);
       toast.success("Product created successfully");
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message || "Error creating product");
     } finally {
       setLoading(false);

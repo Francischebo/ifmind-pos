@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
+import { useCallback, useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { useAuth } from "@/hooks/useAuth";
+import { useAuth } from "@/hooks/useAuthContext";
 import { ApiService } from "@/lib/api";
 import {
   Card,
@@ -85,39 +85,7 @@ const AccountsReceivable = () => {
     overdueCount: 0,
   });
 
-  useEffect(() => {
-    if (user) {
-      loadReceivables();
-    }
-  }, [user]);
-
-  const loadReceivables = async () => {
-    setLoading(true);
-    try {
-      const data = await ApiService.get<any[]>("/invoices");
-      const invoiceData = (data || [])
-        .filter((invoice) =>
-          ["issued", "partially_paid"].includes(invoice.status),
-        )
-        .map((invoice) => ({
-          ...invoice,
-          total_amount: Number(invoice.total_amount || 0),
-          paid_amount: Number(invoice.paid_amount || 0),
-          balance_due: Number(invoice.balance_due || 0),
-          customer: invoice.customer || undefined,
-        })) as Invoice[];
-      setInvoices(invoiceData);
-      calculateAging(invoiceData);
-      calculateCustomerBalances(invoiceData);
-      calculateTotals(invoiceData);
-    } catch (error) {
-      console.error("Error loading receivables:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const calculateAging = (invoiceData: Invoice[]) => {
+  const calculateAging = useCallback((invoiceData: Invoice[]) => {
     const today = new Date();
     const buckets: AgingBucket[] = [
       {
@@ -186,9 +154,9 @@ const AccountsReceivable = () => {
     });
 
     setAgingBuckets(buckets);
-  };
+  }, []);
 
-  const calculateCustomerBalances = (invoiceData: Invoice[]) => {
+  const calculateCustomerBalances = useCallback((invoiceData: Invoice[]) => {
     const today = new Date();
     const customerMap = new Map<string, CustomerBalance>();
 
@@ -225,9 +193,9 @@ const AccountsReceivable = () => {
     );
 
     setCustomerBalances(balances);
-  };
+  }, []);
 
-  const calculateTotals = (invoiceData: Invoice[]) => {
+  const calculateTotals = useCallback((invoiceData: Invoice[]) => {
     const today = new Date();
     let totalReceivables = 0;
     let totalOverdue = 0;
@@ -251,7 +219,39 @@ const AccountsReceivable = () => {
     });
 
     setTotals({ totalReceivables, totalOverdue, totalCurrent, overdueCount });
-  };
+  }, []);
+
+  const loadReceivables = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await ApiService.get<Invoice[]>("/invoices");
+      const invoiceData = (data || [])
+        .filter((invoice) =>
+          ["issued", "partially_paid"].includes(invoice.status),
+        )
+        .map((invoice) => ({
+          ...invoice,
+          total_amount: Number(invoice.total_amount || 0),
+          paid_amount: Number(invoice.paid_amount || 0),
+          balance_due: Number(invoice.balance_due || 0),
+          customer: invoice.customer || undefined,
+        })) as Invoice[];
+      setInvoices(invoiceData);
+      calculateAging(invoiceData);
+      calculateCustomerBalances(invoiceData);
+      calculateTotals(invoiceData);
+    } catch (error) {
+      console.error("Error loading receivables:", error);
+    } finally {
+      setLoading(false);
+    }
+  }, [calculateAging, calculateCustomerBalances, calculateTotals]);
+
+  useEffect(() => {
+    if (user) {
+      void loadReceivables();
+    }
+  }, [loadReceivables, user]);
 
   const getStatusBadge = (invoice: Invoice) => {
     if (!invoice.due_date)

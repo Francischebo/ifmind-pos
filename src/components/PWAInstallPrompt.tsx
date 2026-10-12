@@ -11,6 +11,11 @@ interface BeforeInstallPromptEvent extends Event {
 export const PWAInstallPrompt = () => {
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [showPrompt, setShowPrompt] = useState(false);
+  const [isInstalled, setIsInstalled] = useState(
+    () =>
+      window.matchMedia("(display-mode: standalone)").matches ||
+      Boolean((navigator as Navigator & { standalone?: boolean }).standalone),
+  );
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -24,9 +29,20 @@ export const PWAInstallPrompt = () => {
       }
     };
 
-    window.addEventListener('beforeinstallprompt', handler);
+    const installedHandler = () => {
+      setIsInstalled(true);
+      setDeferredPrompt(null);
+      setShowPrompt(false);
+      localStorage.removeItem("pwa-install-dismissed");
+    };
 
-    return () => window.removeEventListener('beforeinstallprompt', handler);
+    window.addEventListener('beforeinstallprompt', handler);
+    window.addEventListener('appinstalled', installedHandler);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handler);
+      window.removeEventListener('appinstalled', installedHandler);
+    };
   }, []);
 
   const handleInstall = async () => {
@@ -46,10 +62,10 @@ export const PWAInstallPrompt = () => {
     localStorage.setItem('pwa-install-dismissed', 'true');
   };
 
-  if (!showPrompt || !deferredPrompt) return null;
+  if (isInstalled || !showPrompt || !deferredPrompt) return null;
 
   return (
-    <Card className="fixed bottom-4 right-4 w-80 z-50 shadow-lg">
+    <Card className="fixed bottom-4 right-4 z-50 w-[min(20rem,calc(100vw-2rem))] shadow-lg">
       <CardHeader className="pb-3">
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-2">
@@ -66,7 +82,7 @@ export const PWAInstallPrompt = () => {
           </Button>
         </div>
         <CardDescription className="text-sm">
-          Install our app for offline access and a better experience
+          Install for quick access. Before an outage, sign in and load the POS catalogue on this device. Offline checkout is limited to provisional walk-in cash sales.
         </CardDescription>
       </CardHeader>
       <CardContent>

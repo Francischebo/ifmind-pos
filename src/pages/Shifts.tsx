@@ -6,7 +6,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { Clock, Play, Square } from 'lucide-react';
-import { useAuth } from '@/hooks/useAuth';
+import { useAuth } from '@/hooks/useAuthContext';
 
 interface Shift {
   id: string;
@@ -39,7 +39,7 @@ export default function Shifts() {
     try {
       const data = await ApiService.get<Shift[]>('/shifts');
       setShifts(data || []);
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message || 'Error loading shifts');
     } finally {
       setLoading(false);
@@ -72,7 +72,7 @@ export default function Shifts() {
       setOpeningCash('');
       toast.success('Shift started successfully');
       loadShifts();
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message || 'Error starting shift');
     }
   };
@@ -109,7 +109,7 @@ export default function Shifts() {
       setActiveShift(null);
       setClosingCash('');
       loadShifts();
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message || 'Error ending shift');
     }
   };

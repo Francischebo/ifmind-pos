@@ -2,15 +2,18 @@
 
 ## ✅ Pre-Deployment Verification
 
-### 1. Database Migrations Applied
-- [ ] Open Supabase Dashboard → SQL Editor
-- [ ] Copy and paste `database_migrations.sql` content
-- [ ] Execute all migrations in order
-- [ ] Verify all tables, functions, and policies created successfully
+### 1. Database Provisioning and Migrations
+- [ ] For a new deployment, provision a dedicated empty PostgreSQL database and run `npm run db:bootstrap` from `server` with `POS_DB_BOOTSTRAP_CONFIRM=CREATE_SCHEMA_IN_EMPTY_DATABASE`. It refuses non-empty public schemas and applies the TypeORM entity baseline plus all TypeORM migrations.
+- [ ] For an empty PostgreSQL deployment, keep the API out of service until bootstrap completes and `npm run migration:show` confirms no pending migrations.
+- [ ] For an existing deployment, confirm the supported baseline schema and take a verified backup. Never run the bootstrap command against an existing database.
+- [ ] From `server`, run `npm run migration:show` against the backend database and confirm which TypeORM migrations are pending.
+- [ ] Back up the backend database, review the pending migrations, then run `npm run migration:run`; run `npm run migration:show` again and confirm no pending migrations remain.
+- [ ] Do not run Supabase migrations or `database_migrations.sql` for this PostgreSQL-only deployment.
 
 ### 2. Environment Variables Configured
 - [ ] Update `.env` with real production values:
-  - [ ] `SUPABASE_SERVICE_ROLE_KEY` (from Supabase project settings)
+  - [ ] `DATABASE_URL` (dedicated PostgreSQL database; never expose to the frontend)
+  - [ ] `JWT_SECRET` (strong random secret)
   - [ ] `MPESA_CONSUMER_KEY` (production credentials)
   - [ ] `MPESA_CONSUMER_SECRET` (production credentials)
   - [ ] `MPESA_PASSKEY` (production credentials)
@@ -18,7 +21,8 @@
   - [ ] `MPESA_C2B_CALLBACK_TOKEN` (64–128 hexadecimal characters; store as a secret)
   - [ ] Preserve callback query parameters and redact callback tokens from proxy/access logs
   - [ ] Drain or expire pending M-Pesa STK requests before deploying callback-token migration
-  - [ ] `RESEND_API_KEY` (production email service)
+  - [ ] `RESEND_API_KEY` (required in production for login OTP)
+  - [ ] `RESEND_FROM_EMAIL` (sender verified in the configured Resend account)
   - [ ] `GEMINI_API_KEY` (if using AI features)
   - [ ] `ENCRYPTION_KEY` (64-character hex key, 32 bytes; not a `VITE_` variable)
 
@@ -26,66 +30,50 @@
 - [ ] Verify CSP headers in `vite.config.ts`
 - [ ] Confirm PWA manifest is properly linked
 - [ ] Check service worker security features
-- [ ] Validate RLS policies are active
+- [ ] Verify PostgreSQL network restrictions, TLS, backups, and least-privilege application credentials
+- [ ] Configure production `RESEND_API_KEY` and a Resend-verified `RESEND_FROM_EMAIL` on the API host, then redeploy/restart the API; production startup and login OTP require both.
 
 ## 🚀 Deployment Steps
 
 ### Vercel frontend with GitHub auto-deploy
 - [ ] Import the GitHub repository into Vercel and set the project root to the folder containing `vercel.json` and the root `package.json`.
-- [ ] Set `VITE_API_URL` (HTTPS API URL ending in `/api`), `VITE_SUPABASE_URL`, and `VITE_SUPABASE_PUBLISHABLE_KEY` for Production and any Preview environments.
-- [ ] Keep the Express API, Socket.IO, scheduled jobs, database, and runtime secrets on the persistent backend host; do not put private backend secrets in Vercel frontend variables.
-- [ ] Configure backend `FRONTEND_URL` and `CORS_ORIGINS` for the exact Vercel production origin and custom domains; add only known stable preview origins that need API access.
-- [ ] Apply backend TypeORM migrations on the API host before releasing changes requiring new schema.
+- [ ] Set `VITE_API_URL` (HTTPS API URL ending in `/api`) for Production and any Preview environments.
+- [ ] Deploy `render.yaml` as a Render Blueprint using the existing POS PostgreSQL database, encryption key, and Vercel production origin. Keep the API on an always-on paid instance for Socket.IO and scheduled jobs.
+- [ ] Configure Render `FRONTEND_URL` and `CORS_ORIGINS` for the exact Vercel production origin and custom domains; add only known stable preview origins that need API access.
+- [ ] Keep database credentials and runtime secrets on Render, not in Vercel frontend variables or GitHub.
+- [ ] Check pending backend TypeORM migrations with `npm run migration:show`, take a verified backup, apply reviewed migrations with `npm run migration:run`, and confirm none remain before releasing backend changes.
 - [ ] Verify a GitHub push creates the intended Preview or Production deployment and verify login, API requests, and real-time updates against the persistent API.
+- [ ] If using multiple API instances, confirm the shared PostgreSQL `LISTEN`/`NOTIFY` channel connects on every instance and the load balancer supports WebSocket upgrades. Understand that rate-limit counters are per-instance; configure a shared store if one global limit is required.
+- [ ] Set `PG_POOL_MAX` so the total pool budget plus one PostgreSQL notification connection per API instance stays within the database connection limit with operational headroom.
+- [ ] Verify the production HTTPS certificate, PWA manifest/icons, and service-worker registration in a supported browser; install and launch from a pilot workstation.
+- [ ] Follow [INSTALLATION_GUIDE.md](./INSTALLATION_GUIDE.md) to prepare each till online, rehearse offline cash capture and same-cashier reconnect in a test environment, and approve the manual outage/reconciliation fallback before rollout.
 
 ### Docker deployment
-- [ ] Provision PostgreSQL with the application's supported baseline schema; TypeORM migrations are incremental, and `database_migrations.sql` is Supabase-specific.
-- [ ] Configure `DATABASE_URL`, `JWT_SECRET`, a fresh 64-character hexadecimal `ENCRYPTION_KEY`, `PUBLIC_ORIGIN`, and the public Supabase URL/publishable key in the untracked `.env` copied from `docker-compose.env.example`.
-- [ ] Back up the database and apply pending TypeORM migrations with `docker compose run --rm api npm run migration:run:docker`.
+- [ ] Set `POSTGRES_PASSWORD` to an independently generated 64-character hexadecimal secret; the default Compose stack persists PostgreSQL in the `postgres-data` volume and does not expose its database port to the host.
+- [ ] Start `postgres`, confirm its health, and run the guarded bootstrap exactly once for its new empty volume before starting the full application.
+- [ ] For a new, dedicated empty database only, run the guarded `docker compose run --rm -e POS_DB_BOOTSTRAP_CONFIRM=CREATE_SCHEMA_IN_EMPTY_DATABASE api npm run db:bootstrap:docker` command. For an existing database, use the migration status and apply commands below.
+- [ ] Configure `POSTGRES_PASSWORD`, `JWT_SECRET`, a fresh 64-character hexadecimal `ENCRYPTION_KEY`, `PUBLIC_ORIGIN`, `RESEND_API_KEY`, and verified `RESEND_FROM_EMAIL` in the untracked `.env` copied from `docker-compose.env.example`. No Supabase settings are required. Set `DATABASE_URL` only to intentionally override the bundled database with an external PostgreSQL instance.
+- [ ] Back up the PostgreSQL volume to storage outside the Docker host and test restore; the named volume alone does not protect against host or disk loss.
+- [ ] Set `PG_POOL_MAX` based on the PostgreSQL connection budget divided across the maximum number of API instances; leave capacity for migrations, monitoring, and administration.
+- [ ] For existing databases, back up, inspect pending TypeORM migrations with `docker compose run --rm api npm run migration:show:docker`, apply reviewed pending migrations with `docker compose run --rm api npm run migration:run:docker`, and confirm none remain.
 - [ ] Build and start with `docker compose up --build -d`; verify both services are healthy with `docker compose ps`.
 - [ ] Terminate public HTTPS at a trusted reverse proxy, set `PUBLIC_ORIGIN` to its exact origin, and configure provider callbacks to preserve query parameters.
 
-### Step 1: Build Production Application
-```bash
-npm run build
-```
+### PostgreSQL-only application environment
 
-### Step 2: Deploy to Production
-Choose your deployment platform:
-- **Vercel**: Connect GitHub repo, set environment variables
-- **Netlify**: Connect repo, configure build settings
-- **Railway**: Deploy from GitHub, set environment variables
-- **Self-hosted**: Upload build files to your server
+For Vercel + a persistent API host, configure `VITE_API_URL` on Vercel and the server variables on the API host. For Docker Compose, copy `docker-compose.env.example` to `.env`. Do not add any Supabase variables; PostgreSQL is the application's database.
 
-### Step 3: Configure Production Environment Variables
-In your deployment platform, set these environment variables:
+The required API values are:
 ```
-VITE_SUPABASE_PROJECT_ID=your_project_id
-VITE_SUPABASE_PUBLISHABLE_KEY=your_publishable_key
-VITE_SUPABASE_URL=your_supabase_url
-VITE_API_URL=your_public_api_url
-SUPABASE_URL=your_supabase_url
-SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
-SUPABASE_ANON_KEY=your_anon_key
-PORT=your_backend_port
-CORS_ORIGINS=your_allowed_frontend_origins
-MPESA_CONSUMER_KEY=your_mpesa_production_key
-MPESA_CONSUMER_SECRET=your_mpesa_production_secret
-MPESA_PASSKEY=your_mpesa_production_passkey
-MPESA_API_BASE_URL=your_mpesa_api_base_url
-MPESA_CALLBACK_URL=your_public_mpesa_callback_url
-MPESA_C2B_CALLBACK_BASE_URL=https://your-public-backend-origin
-MPESA_C2B_CALLBACK_TOKEN=64_to_128_hex_characters
-PESAPAL_IPN_SECRET=your_pesapal_ipn_signing_secret
-RESEND_API_KEY=your_resend_production_key
+DATABASE_URL=your_postgresql_connection_url
+JWT_SECRET=your_long_random_secret
 ENCRYPTION_KEY=64_hex_characters
-JWT_SECRET=your_256_bit_jwt_secret
-GEMINI_API_KEY=your_gemini_api_key
-AI_GATEWAY_URL=your_ai_gateway_url
-AI_MODEL=your_ai_model_identifier
+FRONTEND_URL=https://your-frontend.example.com
+CORS_ORIGINS=https://your-frontend.example.com
+PORT=your_backend_port
 ```
 
-Before deploying encryption migrations, take a verified backup and configure PostgreSQL's `app.encryption_key` session setting to the same `ENCRYPTION_KEY` for both the backend connection and Supabase PostgREST sessions. For Supabase, set the value for the `authenticator` role through an administrator-managed secret/configuration process; do not commit the value or place it in frontend variables. If audit/offline encrypted rows exist, set their original key as the session-only `app.legacy_encryption_key` for the migration connection; the migration aborts rather than silently lose data when legacy decryption fails. Preserve the backup and stop if the prior key cannot be verified.
+Optional payment, email, tax, and AI integrations require their own provider settings. They are not PostgreSQL or Supabase database requirements; leave them unset only if those associated features are not being used. Before deploying encryption migrations, take a verified backup. If audit/offline encrypted rows exist, set their original key as the session-only `app.legacy_encryption_key` for the migration connection; the migration aborts rather than silently lose data when legacy decryption fails. Preserve the backup and stop if the prior key cannot be verified.
 
 Apply backend TypeORM migrations from `server` with `npm run migration:run` (do not substitute the Supabase SQL script). Before applying `1791020000000-AddMpesaPaybillReferences`, run the duplicate-receipt query in README and reconcile any results against Safaricom and accounting records. After deploying the API, configure the Paybill shortcode in Settings and use the admin callback-registration action; confirm Safaricom accepted the registration before enabling Paybill at the POS. Till payments use STK Push.
 
@@ -95,7 +83,9 @@ Reservations protect stock while payment is pending and do not expire automatica
 
 ## 📊 Monitoring & Alerting Setup
 
-### Step 1: Enable Supabase Edge Functions
+### Optional: Supabase Edge Functions
+
+These functions are separate optional extensions. Do not deploy them or configure Supabase to run the PostgreSQL-only POS application.
 ```bash
 # Deploy monitoring functions
 supabase functions deploy send-inventory-alerts

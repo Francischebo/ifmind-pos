@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useCallback, useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Camera, X, Loader2 } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
@@ -16,17 +16,7 @@ export function BarcodeScanner({ onScan }: BarcodeScannerProps) {
   const codeReader = useRef<BrowserMultiFormatReader | null>(null);
   const scanTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  useEffect(() => {
-    if (isOpen) {
-      startScanning();
-    } else {
-      stopScanning();
-    }
-    
-    return () => stopScanning();
-  }, [isOpen]);
-
-  const startScanning = async () => {
+  const startScanning = useCallback(async () => {
     try {
       setIsScanning(true);
       setError('');
@@ -92,14 +82,16 @@ export function BarcodeScanner({ onScan }: BarcodeScannerProps) {
       );
 
       setIsScanning(false);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Camera access error:', err);
-      setError(err.message || 'Failed to access camera');
+      setError(
+        err instanceof Error ? err.message : 'Failed to access camera',
+      );
       setIsScanning(false);
     }
-  };
+  }, [onScan]);
 
-  const stopScanning = () => {
+  const stopScanning = useCallback(() => {
     if (scanTimeoutRef.current) {
       clearTimeout(scanTimeoutRef.current);
       scanTimeoutRef.current = null;
@@ -111,7 +103,17 @@ export function BarcodeScanner({ onScan }: BarcodeScannerProps) {
     }
     
     setIsScanning(false);
-  };
+  }, []);
+
+  useEffect(() => {
+    if (isOpen) {
+      void startScanning();
+    } else {
+      stopScanning();
+    }
+
+    return () => stopScanning();
+  }, [isOpen, startScanning, stopScanning]);
 
   return (
     <>

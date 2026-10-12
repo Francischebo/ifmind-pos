@@ -95,6 +95,60 @@ const run = async () => {
             assert.equal(rekeyed.rows[0].mpesa_phone, legacyMpesaPhone);
             assert.equal(rekeyed.rows[0].audit_phone, legacyAuditPhone);
             assert.equal(rekeyed.rows[0].offline_data, legacyOfflineData);
+
+            await migrationClient.query(`
+                CREATE FUNCTION public.create_secure_sale(
+                    p_cashier_id UUID,
+                    p_payment_method TEXT,
+                    p_items JSONB,
+                    p_customer_id UUID DEFAULT NULL,
+                    p_loyalty_discount NUMERIC DEFAULT 0,
+                    p_idempotency_key TEXT DEFAULT NULL
+                )
+                RETURNS INTEGER
+                LANGUAGE SQL
+                SECURITY DEFINER
+                AS $$ SELECT 1 $$;
+                GRANT EXECUTE ON FUNCTION
+                    public.create_secure_sale(UUID, TEXT, JSONB, UUID, NUMERIC, TEXT)
+                    TO PUBLIC;
+            `);
+
+            const rpcPrivilegeMigrationPath = path.resolve(
+                process.cwd(),
+                "../supabase/migrations/20261005204500_restrict_secure_sale_rpc.sql"
+            );
+            const rpcPrivilegeMigration = readFileSync(rpcPrivilegeMigrationPath, "utf8");
+            await migrationClient.query(rpcPrivilegeMigration);
+            await migrationClient.query(rpcPrivilegeMigration);
+
+            const publicRpcPrivilege = await migrationClient.query(`
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM pg_proc p
+                    JOIN pg_namespace n ON n.oid = p.pronamespace
+                    CROSS JOIN LATERAL aclexplode(
+                        COALESCE(p.proacl, acldefault('f', p.proowner))
+                    ) privilege
+                    WHERE n.nspname = 'public'
+                      AND p.proname = 'create_secure_sale'
+                      AND privilege.grantee = 0
+                      AND privilege.privilege_type = 'EXECUTE'
+                ) AS public_can_execute
+            `);
+            assert.equal(publicRpcPrivilege.rows[0].public_can_execute, false);
+
+            const apiRolePrivileges = await migrationClient.query(`
+                SELECT r.rolname, has_function_privilege(r.rolname, p.oid, 'EXECUTE') AS can_execute
+                FROM pg_roles r
+                CROSS JOIN pg_proc p
+                JOIN pg_namespace n ON n.oid = p.pronamespace
+                WHERE r.rolname IN ('anon', 'authenticated', 'service_role')
+                  AND n.nspname = 'public'
+                  AND p.proname = 'create_secure_sale'
+            `);
+            assert.equal(apiRolePrivileges.rows.some((row) => row.can_execute), false);
+
             await migrationClient.query(`
                 DROP TABLE public.customers;
                 DROP TABLE public.mpesa_transactions;
@@ -103,6 +157,66 @@ const run = async () => {
             `);
         } finally {
             await migrationClient.end().catch(() => {});
+        }
+
+        const bootstrapDatabaseName = `pos_bootstrap_test_${Date.now()}_${randomUUID().slice(0, 8)}`;
+        let bootstrapDatabaseCreated = false;
+        try {
+            await admin.query(`CREATE DATABASE "${bootstrapDatabaseName}"`);
+            bootstrapDatabaseCreated = true;
+            const bootstrapDatabaseUrl = new URL(configuredDatabaseUrl);
+            bootstrapDatabaseUrl.pathname = `/${bootstrapDatabaseName}`;
+            const bootstrapEnvironment = {
+                ...process.env,
+                DATABASE_URL: bootstrapDatabaseUrl.toString(),
+                POS_DB_BOOTSTRAP_CONFIRM: "CREATE_SCHEMA_IN_EMPTY_DATABASE",
+                TYPEORM_SYNCHRONIZE: "false",
+                NODE_ENV: "test",
+            };
+            const bootstrapResult = spawnSync(
+                process.execPath,
+                ["--require", "ts-node/register", "src/bootstrap.ts"],
+                { cwd: process.cwd(), stdio: "inherit", env: bootstrapEnvironment },
+            );
+            if (bootstrapResult.error) throw bootstrapResult.error;
+            assert.equal(bootstrapResult.status, 0, "fresh database bootstrap must succeed");
+
+            const bootstrapClient = new Client({ connectionString: bootstrapDatabaseUrl.toString() });
+            try {
+                await bootstrapClient.connect();
+                const baseline = await bootstrapClient.query(`
+                    SELECT
+                        (SELECT count(*)::integer FROM public.migrations) AS migration_count,
+                        EXISTS (
+                            SELECT 1 FROM information_schema.tables
+                            WHERE table_schema = 'public' AND table_name = 'sales'
+                        ) AS has_sales,
+                        EXISTS (
+                            SELECT 1 FROM information_schema.tables
+                            WHERE table_schema = 'public' AND table_name = 'stock_movements'
+                        ) AS has_stock_movement_ledger
+                `);
+                assert.equal(baseline.rows[0].migration_count, 19);
+                assert.equal(baseline.rows[0].has_sales, true);
+                assert.equal(baseline.rows[0].has_stock_movement_ledger, true);
+            } finally {
+                await bootstrapClient.end();
+            }
+
+            const secondBootstrapResult = spawnSync(
+                process.execPath,
+                ["--require", "ts-node/register", "src/bootstrap.ts"],
+                { cwd: process.cwd(), encoding: "utf8", env: bootstrapEnvironment },
+            );
+            assert.notEqual(secondBootstrapResult.status, 0, "bootstrap must reject a populated database");
+            assert.match(
+                secondBootstrapResult.stderr,
+                /Refusing to bootstrap a non-empty public schema/,
+            );
+        } finally {
+            if (bootstrapDatabaseCreated) {
+                await admin.query(`DROP DATABASE "${bootstrapDatabaseName}"`);
+            }
         }
 
         const testEnvironment = {

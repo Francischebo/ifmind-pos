@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { AuthenticatedRequest } from "../middleware/auth";
 import { AppDataSource } from "../data-source";
 import { Sale, SaleStatus, PaymentMethod } from "../entity/Sale";
 import { SaleItem } from "../entity/SaleItem";
@@ -52,6 +53,8 @@ export interface SanitizedSalePayload {
     store_credit_barcode?: string;
     mpesa_transaction_ids?: string[];
     checkout_session_id?: string;
+    expected_total_amount?: number;
+    offline_created_at?: Date;
 }
 
 export const calculateCashChange = (
@@ -167,6 +170,35 @@ export const sanitizeSalePayload = (input: unknown): SanitizedSalePayload => {
             throw new Error("checkout_session_id must be a valid UUID");
         }
         sanitized.checkout_session_id = checkout_session_id;
+    }
+
+    if (payload.expected_total_amount !== undefined) {
+        const expectedTotal = Number(payload.expected_total_amount);
+        if (!Number.isFinite(expectedTotal) || expectedTotal <= 0) {
+            throw new Error("expected_total_amount must be a positive number");
+        }
+        sanitized.expected_total_amount = expectedTotal;
+    }
+
+    if (payload.offline_created_at !== undefined) {
+        if (typeof payload.offline_created_at !== "string") {
+            throw new Error("offline_created_at must be a valid ISO date");
+        }
+        const offlineCreatedAt = new Date(payload.offline_created_at);
+        if (!Number.isFinite(offlineCreatedAt.getTime())) {
+            throw new Error("offline_created_at must be a valid ISO date");
+        }
+        sanitized.offline_created_at = offlineCreatedAt;
+    }
+
+    if (
+        (sanitized.offline_created_at && sanitized.expected_total_amount === undefined) ||
+        (!sanitized.offline_created_at && sanitized.expected_total_amount !== undefined)
+    ) {
+        throw new Error("Offline sale metadata must include both offline_created_at and expected_total_amount");
+    }
+    if (sanitized.offline_created_at && !sanitized.idempotency_key) {
+        throw new Error("Offline sales require an idempotency_key");
     }
 
     return sanitized;
@@ -308,7 +340,7 @@ export class SalesController {
         }
     }
 
-    static async createSale(req: any, res: Response) {
+    static async createSale(req: AuthenticatedRequest, res: Response) {
         // Run as a database transaction
         const queryRunner = AppDataSource.createQueryRunner();
         await queryRunner.connect();
@@ -328,12 +360,14 @@ export class SalesController {
                 store_credit_barcode,
                 mpesa_transaction_ids,
                 checkout_session_id,
+                expected_total_amount,
+                offline_created_at,
             } = sanitizeSalePayload(req.body);
 
             const normalizedIdempotencyKey = typeof idempotency_key === "string"
                 ? idempotency_key.trim()
                 : "";
-            const cashier = await queryRunner.manager.findOneBy(User, { id: req.user.id });
+            const cashier = await queryRunner.manager.findOneBy(User, { id: req.user!.id });
             if (!cashier) throw new Error("Cashier not found");
 
             if (normalizedIdempotencyKey) {
@@ -359,10 +393,13 @@ export class SalesController {
                         Math.round(Number(value || 0) * 100);
                     const sameSaleRequest =
                         JSON.stringify(requestedItems) === JSON.stringify(existingItems) &&
+                        existingSale.payment_method === (payment_method || existingSale.payment_method) &&
                         amountInCents(existingSale.cash_amount) === amountInCents(cash_amount) &&
                         amountInCents(existingSale.mpesa_amount) === amountInCents(mpesa_amount) &&
                         amountInCents(existingSale.store_credit_amount) === amountInCents(store_credit_amount) &&
+                        amountInCents(existingSale.total_amount) === amountInCents(expected_total_amount ?? existingSale.total_amount) &&
                         amountInCents(existingSale.loyalty_discount) === amountInCents(loyalty_discount) &&
+                        (existingSale.offline_created_at?.toISOString() || null) === (offline_created_at?.toISOString() || null) &&
                         (existingSale.customer?.id || null) === (customer_id || null) &&
                         (existingSale.warehouse?.id || null) === (warehouse_id || null) &&
                         (existingSale.store_credit_barcode || null) === (store_credit_barcode || null);
@@ -585,6 +622,30 @@ export class SalesController {
             const subtotalWithDiscount = Math.max(0, calculatedSubtotal - appliedDiscount);
             const calculatedTotal = subtotalWithDiscount + calculatedTaxAmount;
 
+            if (offline_created_at) {
+                if (
+                    payment_method !== PaymentMethod.CASH ||
+                    Boolean(customer_id) ||
+                    Number(loyalty_discount || 0) !== 0 ||
+                    Number(mpesa_amount || 0) !== 0 ||
+                    Number(store_credit_amount || 0) !== 0 ||
+                    Boolean(store_credit_barcode) ||
+                    Boolean(checkout_session_id) ||
+                    Boolean(mpesa_transaction_ids?.length)
+                ) {
+                    throw new Error("Offline captures are restricted to walk-in cash sales without discounts");
+                }
+                if (
+                    expected_total_amount === undefined ||
+                    Math.round(expected_total_amount * 100) !== Math.round(calculatedTotal * 100)
+                ) {
+                    await queryRunner.rollbackTransaction();
+                    return res.status(409).json({
+                        message: "Current server price or tax differs from the provisional offline sale. Review it before recording a replacement sale.",
+                    });
+                }
+            }
+
             const paymentAmounts = [cash_amount, mpesa_amount, store_credit_amount]
                 .map((value) => Number((value || 0).toFixed(2)));
             if (paymentAmounts.some((value) => !Number.isFinite(value) || value < 0)) {
@@ -677,6 +738,7 @@ export class SalesController {
             sale.payment_status = "paid";
             sale.loyalty_discount = appliedDiscount;
             sale.idempotency_key = normalizedIdempotencyKey || null;
+            sale.offline_created_at = offline_created_at || null;
             sale.status = SaleStatus.COMPLETED;
 
             // Handle Store Credit deductions
@@ -827,7 +889,7 @@ export class SalesController {
         }
     }
 
-    static async voidSale(req: any, res: Response) {
+    static async voidSale(req: AuthenticatedRequest, res: Response) {
         const saleId = req.params.id;
         const { reason } = sanitizeVoidSalePayload(req.body ?? {});
 
@@ -844,7 +906,7 @@ export class SalesController {
             if (!sale) throw new Error("Sale not found");
             if (sale.status === SaleStatus.VOIDED) throw new Error("Sale is already voided");
 
-            const cashier = await queryRunner.manager.findOneBy(User, { id: req.user.id });
+            const cashier = await queryRunner.manager.findOneBy(User, { id: req.user!.id });
             if (!cashier) throw new Error("Cashier not found");
 
             let calculatedTotalCogs = 0;
@@ -963,7 +1025,7 @@ export class SalesController {
         }
     }
 
-    static async parkSale(req: any, res: Response) {
+    static async parkSale(req: AuthenticatedRequest, res: Response) {
         const queryRunner = AppDataSource.createQueryRunner();
         try {
             const { items, customer_id, warehouse_id, loyalty_discount = 0 } =
@@ -971,7 +1033,7 @@ export class SalesController {
             await queryRunner.connect();
             await queryRunner.startTransaction();
 
-            const cashier = await queryRunner.manager.findOneBy(User, { id: req.user.id });
+            const cashier = await queryRunner.manager.findOneBy(User, { id: req.user!.id });
             if (!cashier) throw new Error("Cashier not found");
 
             const customer = customer_id
@@ -1052,10 +1114,10 @@ export class SalesController {
         }
     }
 
-    static async getParkedSales(req: any, res: Response) {
+    static async getParkedSales(req: AuthenticatedRequest, res: Response) {
         try {
             const sales = await saleRepository.find({
-                where: { status: SaleStatus.PARKED, cashier: { id: req.user.id } },
+                where: { status: SaleStatus.PARKED, cashier: { id: req.user!.id } },
                 relations: ["items", "items.product", "customer", "warehouse"]
             });
             res.json(sales);

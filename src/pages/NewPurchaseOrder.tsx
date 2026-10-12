@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/select";
 import { toast } from "sonner";
 import { ArrowLeft, Plus, Trash2 } from "lucide-react";
-import { useAuth } from "@/hooks/useAuth";
+import { useAuth } from "@/hooks/useAuthContext";
 
 interface Vendor {
   id: string;
@@ -62,7 +62,7 @@ export default function NewPurchaseOrder() {
     try {
       const data = await ApiService.get<Vendor[]>("/vendors");
       setVendors(data || []);
-    } catch (e: any) {
+    } catch (e) {
       toast.error("Failed to load vendors: " + e.message);
     }
   };
@@ -71,7 +71,7 @@ export default function NewPurchaseOrder() {
     try {
       const data = await ApiService.get<Product[]>("/products");
       setProducts(data || []);
-    } catch (e: any) {
+    } catch (e) {
       toast.error("Failed to load products: " + e.message);
     }
   };
@@ -85,7 +85,7 @@ export default function NewPurchaseOrder() {
         (warehouse) => warehouse.is_main,
       );
       if (mainWarehouse) setWarehouseId(mainWarehouse.id);
-    } catch (e: any) {
+    } catch (e) {
       toast.error("Failed to load warehouses: " + e.message);
     }
   };
@@ -98,7 +98,7 @@ export default function NewPurchaseOrder() {
     setItems(items.filter((_, i) => i !== index));
   };
 
-  const updateItem = (index: number, field: keyof POItem, value: any) => {
+  const updateItem = (index: number, field: keyof POItem, value: string | number) => {
     const newItems = [...items];
     newItems[index] = { ...newItems[index], [field]: value };
 
@@ -144,7 +144,7 @@ export default function NewPurchaseOrder() {
 
       toast.success("Purchase order created successfully");
       navigate("/purchase-orders");
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message || "Error creating purchase order");
     } finally {
       setLoading(false);

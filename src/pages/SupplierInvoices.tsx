@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Receipt, Search, Plus, CreditCard, Eye } from "lucide-react";
 import { toast } from "sonner";
-import { useAuth } from "@/hooks/useAuth";
+import { useAuth } from "@/hooks/useAuthContext";
 import {
   Table,
   TableBody,
@@ -147,7 +147,7 @@ export default function SupplierInvoices() {
       setVendors((vendorsData || []) as Vendor[]);
       setPurchaseOrders((posData || []) as PurchaseOrder[]);
       setDeliveryNotes((deliveryNotesData || []) as DeliveryNote[]);
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message || "Failed to load supplier invoice data");
     } finally {
       setLoading(false);
@@ -160,7 +160,7 @@ export default function SupplierInvoices() {
         `/procurement/supplier-invoices/${invoiceId}/payments`,
       );
       setPayments(data || []);
-    } catch (error: any) {
+    } catch (error) {
       console.error("Failed to load supplier payments", error);
       setPayments([]);
     }
@@ -210,7 +210,7 @@ export default function SupplierInvoices() {
         tax_amount: "",
       });
       await loadData();
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message || "Failed to create invoice");
     }
   };
@@ -251,7 +251,7 @@ export default function SupplierInvoices() {
       });
       await loadData();
       await loadPayments(selectedInvoice.id);
-    } catch (error: any) {
+    } catch (error) {
       toast.error(error.message || "Failed to record payment");
     }
   };

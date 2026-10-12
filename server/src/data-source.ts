@@ -50,12 +50,60 @@ if (!process.env.ENCRYPTION_KEY || !/^[0-9a-fA-F]{64}$/.test(process.env.ENCRYPT
     throw new Error("ENCRYPTION_KEY must be configured as 64 hexadecimal characters (32 bytes).");
 }
 
+export const KNOWN_DEFAULT_ENCRYPTION_KEYS = new Set([
+    "854b1203f9667e40f1b2f9c98e24b76a296b1f265eaaaf1d6d64954d1bafa9d3".toLowerCase(),
+]);
+
+export const KNOWN_DEFAULT_JWT_SECRETS = new Set([
+    "e2e738d0341c20993ff3a19a8e840efa9dc826dab287b27376e69bb9ef6562d1".toLowerCase(),
+    "secret",
+    "jwt_secret",
+    "changeme",
+]);
+
+if (process.env.NODE_ENV === "production") {
+    if (process.env.ENCRYPTION_KEY && KNOWN_DEFAULT_ENCRYPTION_KEYS.has(process.env.ENCRYPTION_KEY.toLowerCase())) {
+        throw new Error("FATAL: Default static ENCRYPTION_KEY detected in production. Generate a unique 64 hexadecimal character key.");
+    }
+
+    const jwtSecret = process.env.JWT_SECRET;
+    if (jwtSecret) {
+        if (jwtSecret.length < 32 || KNOWN_DEFAULT_JWT_SECRETS.has(jwtSecret.toLowerCase())) {
+            throw new Error("FATAL: JWT_SECRET in production must be at least 32 characters and cannot match sample/default keys.");
+        }
+    }
+}
+
+if (process.env.NODE_ENV === "production" && process.env.TYPEORM_SYNCHRONIZE === "true") {
+    throw new Error("TYPEORM_SYNCHRONIZE must be disabled in production; apply reviewed migrations instead.");
+}
+
+const parsePoolSetting = (name: string, fallback: number, minimum: number, maximum: number) => {
+    const rawValue = process.env[name];
+    if (rawValue === undefined || rawValue.trim() === "") {
+        return fallback;
+    }
+
+    const value = Number(rawValue);
+    if (!Number.isInteger(value) || value < minimum || value > maximum) {
+        throw new Error(`${name} must be an integer between ${minimum} and ${maximum}.`);
+    }
+
+    return value;
+};
+
+const postgresPoolMax = parsePoolSetting("PG_POOL_MAX", 10, 1, 100);
+const postgresConnectionTimeoutMillis = parsePoolSetting("PG_CONNECTION_TIMEOUT_MS", 5000, 1000, 60000);
+
 export const AppDataSource = new DataSource({
     type: "postgres",
     url: process.env.DATABASE_URL,
     synchronize: process.env.TYPEORM_SYNCHRONIZE === "true",
     logging: ["error"],
     extra: {
+        max: postgresPoolMax,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: postgresConnectionTimeoutMillis,
         options: `-c app.encryption_key=${process.env.ENCRYPTION_KEY}`,
     },
     entities: [PurchaseRequisition, Shift, OtpCode, ReturnRequest, ReturnItem, SaleItemBatch, __dirname + "/entity/*.{js,ts}"],

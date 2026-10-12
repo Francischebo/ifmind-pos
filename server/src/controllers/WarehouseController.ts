@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { AppDataSource } from "../data-source";
 import { Warehouse } from "../entity/Warehouse";
 import { WarehouseService } from "../services/WarehouseService";
+import { getErrorMessage } from "../utils/errors";
 
 class CannotDemoteMainWarehouseError extends Error {}
 
@@ -14,24 +15,26 @@ const WAREHOUSE_ALLOWED_FIELDS = new Set([
 
 export const sanitizeWarehousePayload = (input: unknown) => {
     if (!input || typeof input !== "object" || Array.isArray(input)) {
-        return {} as Record<string, any>;
+        return {} as Partial<Warehouse>;
     }
 
-    const sanitized: Record<string, any> = {};
+    const sanitized: Partial<Warehouse> = {};
     for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
         if (!WAREHOUSE_ALLOWED_FIELDS.has(key) || value === undefined || value === null) {
             continue;
         }
 
-        if (typeof value === "string") {
+        if ((key === "name" || key === "location_address") && typeof value === "string") {
             const trimmed = value.trim();
             if (trimmed === "" && key === "name") continue;
-            sanitized[key] = trimmed;
+            if (key === "name") sanitized.name = trimmed;
+            else sanitized.location_address = trimmed;
             continue;
         }
 
-        if (typeof value === "boolean") {
-            sanitized[key] = value;
+        if ((key === "is_main" || key === "is_active") && typeof value === "boolean") {
+            if (key === "is_main") sanitized.is_main = value;
+            else sanitized.is_active = value;
         }
     }
 
@@ -74,9 +77,9 @@ export class WarehouseController {
                 return manager.save(newWarehouse);
             });
             res.status(201).json(warehouse);
-        } catch (error: any) {
+        } catch (error) {
             console.error(error);
-            res.status(500).json({ message: error.message || "Error creating warehouse" });
+            res.status(500).json({ message: getErrorMessage(error, "Error creating warehouse") });
         }
     }
 
@@ -116,7 +119,7 @@ export class WarehouseController {
                 return res.status(404).json({ message: "Warehouse not found" });
             }
             res.status(200).json(warehouse);
-        } catch (error: any) {
+        } catch (error) {
             if (error instanceof CannotDemoteMainWarehouseError) {
                 return res.status(400).json({ message: error.message });
             }
@@ -124,7 +127,7 @@ export class WarehouseController {
                 return res.status(400).json({ message: error.message });
             }
             console.error(error);
-            res.status(500).json({ message: error.message || "Error updating warehouse" });
+            res.status(500).json({ message: getErrorMessage(error, "Error updating warehouse") });
         }
     }
 
@@ -147,9 +150,9 @@ export class WarehouseController {
             await warehouseRepo.save(warehouse);
             
             res.status(200).json({ message: "Warehouse deactivated successfully" });
-        } catch (error: any) {
+        } catch (error) {
             console.error(error);
-            res.status(500).json({ message: error.message || "Error deleting warehouse" });
+            res.status(500).json({ message: getErrorMessage(error, "Error deleting warehouse") });
         }
     }
 }

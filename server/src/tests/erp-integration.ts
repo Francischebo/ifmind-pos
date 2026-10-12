@@ -1,4 +1,5 @@
 import * as dotenv from "dotenv";
+import { createRequire } from "node:module";
 import { User, AppRole } from "../entity/User";
 import { Product } from "../entity/Product";
 import { Warehouse } from "../entity/Warehouse";
@@ -25,7 +26,8 @@ if (!/test|testing|integration/i.test(testDatabaseName)) {
 process.env.DATABASE_URL = testDatabaseUrl;
 process.env.TYPEORM_SYNCHRONIZE = "true";
 
-const { AppDataSource } = require("../data-source") as typeof import("../data-source");
+const loadModule = createRequire(__filename);
+const { AppDataSource } = loadModule("../data-source") as typeof import("../data-source");
 
 async function runTests() {
     console.log("---- STARTING THOROUGH ERP SYSTEM TEST ----");
@@ -150,8 +152,8 @@ async function runTests() {
         // Clean closure
         console.log("---- ALL ERP SYSTEMS VALIDATED SUCCESSFULLY ----");
         
-    } catch (e: any) {
-        console.error("TEST FAILED:", e.message);
+    } catch (e) {
+        console.error("TEST FAILED:", e instanceof Error ? e.message : e);
         process.exit(1);
     } finally {
         await AppDataSource.destroy();

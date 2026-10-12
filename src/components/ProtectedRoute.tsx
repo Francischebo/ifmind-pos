@@ -1,8 +1,17 @@
-import { Navigate } from 'react-router-dom';
-import { useAuth } from '@/hooks/useAuth';
+import { Navigate, useLocation } from "react-router-dom";
+import { useAuth } from "@/hooks/useAuthContext";
+import { useOfflineQueue } from "@/hooks/useOfflineQueueContext";
+import type { UserRole } from "@/hooks/useAuth";
 
-export function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { user, loading } = useAuth();
+interface ProtectedRouteProps {
+  children: React.ReactNode;
+  allowedRoles?: UserRole[];
+}
+
+export function ProtectedRoute({ children, allowedRoles }: ProtectedRouteProps) {
+  const { user, userRole, loading, isOfflineSession } = useAuth();
+  const { isOnline } = useOfflineQueue();
+  const location = useLocation();
 
   if (loading) {
     return (
@@ -16,5 +25,18 @@ export function ProtectedRoute({ children }: { children: React.ReactNode }) {
     return <Navigate to="/auth" replace />;
   }
 
+  // Offline sessions are strictly sandboxed to /sales (Checkout / Register)
+  if ((isOfflineSession || !isOnline) && location.pathname !== "/sales") {
+    return <Navigate to="/sales" replace />;
+  }
+
+  // Enforce role-based access control for protected routes
+  if (allowedRoles && allowedRoles.length > 0) {
+    if (!userRole || !allowedRoles.includes(userRole)) {
+      return <Navigate to="/sales" replace />;
+    }
+  }
+
   return <>{children}</>;
 }
+

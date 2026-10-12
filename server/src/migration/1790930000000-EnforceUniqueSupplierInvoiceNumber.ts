@@ -22,7 +22,7 @@ export class EnforceUniqueSupplierInvoiceNumber1790930000000 implements Migratio
             WHERE "invoice_number" <> upper(btrim("invoice_number"))
         `);
         await queryRunner.query(`
-            CREATE UNIQUE INDEX "IDX_supplier_invoice_vendor_number"
+            CREATE UNIQUE INDEX IF NOT EXISTS "IDX_supplier_invoice_vendor_number"
             ON "supplier_invoices" ("vendor_id", "invoice_number")
         `);
     }

@@ -4,7 +4,9 @@ import cors from "cors";
 import helmet from "helmet";
 import multer from "multer";
 import rateLimit from "express-rate-limit";
+import { ipKeyGenerator } from "express-rate-limit";
 import { createServer } from "http";
+import * as jwt from "jsonwebtoken";
 import { AppDataSource } from "./data-source";
 import { AuthController } from "./controllers/AuthController";
 import { ProductController } from "./controllers/ProductController";
@@ -31,6 +33,11 @@ import { InventoryPredictionController } from "./controllers/InventoryPrediction
 import { authenticateJWT, requireRole, requireRoles } from "./middleware/auth";
 import { SocketService } from "./services/SocketService";
 import { CronService } from "./services/CronService";
+import { AccountingService } from "./services/AccountingService";
+import { WarehouseService } from "./services/WarehouseService";
+import { TaxService } from "./services/TaxService";
+import { AdminSetupService } from "./services/AdminSetupService";
+import { getOtpEmailConfigurationIssues } from "./services/EmailService";
 
 export const app = express();
 export const httpServer = createServer(app);
@@ -62,7 +69,7 @@ const companyLogoUpload = multer({
 });
 
 const handleCompanyLogoUpload = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    companyLogoUpload.single("logo")(req, res, (error?: any) => {
+    companyLogoUpload.single("logo")(req, res, (error?: unknown) => {
         if (!error) {
             next();
             return;
@@ -80,7 +87,7 @@ const handleCompanyLogoUpload = (req: express.Request, res: express.Response, ne
 };
 
 const handleProductImportUpload = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    const onUploadComplete: express.NextFunction = (error?: any) => {
+    const onUploadComplete: express.NextFunction = (error?: unknown) => {
         if (!error) {
             next();
             return;
@@ -116,7 +123,7 @@ if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
     process.exit(1);
 }
 
-const defaultAllowedOrigins = [
+export const defaultAllowedOrigins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://localhost:8080",
@@ -127,16 +134,43 @@ const defaultAllowedOrigins = [
     "http://127.0.0.1:8081",
 ];
 
-const allowedOrigins = Array.from(new Set([
-    ...defaultAllowedOrigins,
-    ...(process.env.CORS_ORIGINS || process.env.FRONTEND_URL || "")
+export const resolveAllowedCorsOrigins = (
+    nodeEnv: string = process.env.NODE_ENV || "development",
+    corsOriginsEnv: string = process.env.CORS_ORIGINS || "",
+    frontendUrlEnv: string = process.env.FRONTEND_URL || "",
+): string[] => {
+    const configuredOrigins = `${corsOriginsEnv},${frontendUrlEnv}`
         .split(",")
         .map((origin) => origin.trim())
-        .filter(Boolean),
-]));
+        .filter(Boolean);
+
+    if (nodeEnv === "production") {
+        return Array.from(new Set(configuredOrigins));
+    }
+
+    return Array.from(new Set([...defaultAllowedOrigins, ...configuredOrigins]));
+};
+
+const allowedOrigins = resolveAllowedCorsOrigins();
 
 // Security Middlewares
-app.use(helmet()); // Sets secure HTTP headers
+app.use(helmet({
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'"],
+            styleSrc: ["'self'", "'unsafe-inline'"],
+            imgSrc: ["'self'", "data:", "blob:"],
+            connectSrc: ["'self'", "https:", "wss:", "http://localhost:3000", "ws://localhost:3000", "http://127.0.0.1:3000", "ws://127.0.0.1:3000"],
+            fontSrc: ["'self'", "data:"],
+            objectSrc: ["'none'"],
+            frameAncestors: ["'none'"],
+            baseUri: ["'self'"],
+            formAction: ["'self'"],
+        },
+    },
+    frameguard: { action: "deny" },
+})); // Sets secure HTTP headers including strict CSP
 app.use(cors({
     origin: (origin, callback) => {
         if (!origin || allowedOrigins.includes(origin)) {
@@ -148,7 +182,12 @@ app.use(cors({
     },
     credentials: true,
 })); // Restricted CORS
-app.use(express.json()); // Parses incoming JSON automatically
+app.use(express.json({
+    limit: "1mb",
+    verify: (req: express.Request & { rawBody?: Buffer }, _res, buf) => {
+        req.rawBody = buf;
+    },
+}));
 
 // Request Logging Middleware
 app.use((req, res, next) => {
@@ -161,14 +200,68 @@ app.use((req, res, next) => {
 });
 
 // Rate Limiting to prevent brute-force
+interface RateLimitIdentity {
+    key: string;
+    authenticated: boolean;
+}
+
+type RateLimitedRequest = express.Request & { rateLimitIdentity?: RateLimitIdentity };
+
+const attachRateLimitIdentity: express.RequestHandler = (req, _res, next) => {
+    const rateLimitedRequest = req as RateLimitedRequest;
+    const cookieHeader = req.headers.cookie;
+    let cookieToken: string | undefined;
+    if (cookieHeader) {
+        const match = cookieHeader.match(/(?:^|;\s*)jwt_token=([^;]+)/);
+        if (match) {
+            cookieToken = decodeURIComponent(match[1]);
+        }
+    }
+    const authorization = req.headers.authorization;
+    const token = cookieToken || (authorization?.startsWith("Bearer ") ? authorization.slice(7) : undefined);
+    if (token && process.env.JWT_SECRET) {
+        try {
+            const decoded = jwt.verify(token, process.env.JWT_SECRET);
+            if (typeof decoded === "object" && typeof decoded.id === "string" && decoded.id) {
+                rateLimitedRequest.rateLimitIdentity = {
+                    key: `user:${decoded.id}`,
+                    authenticated: true,
+                };
+                next();
+                return;
+            }
+        } catch {
+            // Invalid and expired tokens use the unauthenticated IP bucket.
+        }
+    }
+
+    rateLimitedRequest.rateLimitIdentity = {
+        key: `ip:${ipKeyGenerator(req.ip || "127.0.0.1")}`,
+        authenticated: false,
+    };
+    next();
+};
+
 const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: process.env.NODE_ENV === "production" ? 100 : 500,
+    limit: (req) => (req as RateLimitedRequest).rateLimitIdentity?.authenticated ? 1200 : 120,
+    keyGenerator: (req) =>
+        (req as RateLimitedRequest).rateLimitIdentity?.key || `ip:${ipKeyGenerator(req.ip || "127.0.0.1")}`,
     standardHeaders: true,
     legacyHeaders: false,
-    message: "Too many requests from this IP, please try again after 15 minutes",
+    skip: (req) => req.path === "/health",
+    message: "Too many requests. Please try again later.",
 });
-app.use("/api/", apiLimiter);
+app.use("/api/", attachRateLimitIdentity, apiLimiter);
+
+const loginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: process.env.NODE_ENV === "production" ? 10 : 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => `login-ip:${ipKeyGenerator(req.ip || "127.0.0.1")}`,
+    message: { message: "Too many login attempts. Please try again after 15 minutes." },
+});
 
 const otpLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -178,8 +271,25 @@ const otpLimiter = rateLimit({
     message: "Too many OTP attempts. Please try again later.",
 });
 
+const loggingLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: process.env.NODE_ENV === "production" ? 30 : 60,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => `log-ip:${ipKeyGenerator(req.ip || "127.0.0.1")}`,
+    message: { message: "Too many log submissions. Please try again after 15 minutes." },
+});
+
+const logPayloadSizeLimiter: express.RequestHandler = (req, res, next) => {
+    const contentLength = Number(req.headers["content-length"]);
+    if (contentLength && contentLength > 10 * 1024) {
+        return res.status(413).json({ message: "Payload exceeds maximum allowed log size of 10KB." });
+    }
+    next();
+};
+
 // Root and Favicon routes to prevent browser 404s
-app.get("/health", async (_req, res) => {
+const healthCheck = async (_req: express.Request, res: express.Response) => {
     try {
         await AppDataSource.query("SELECT 1");
         res.json({ status: "ok" });
@@ -187,24 +297,28 @@ app.get("/health", async (_req, res) => {
         console.error("Health check failed: PostgreSQL is unavailable.", error);
         res.status(503).json({ status: "unavailable" });
     }
-});
+};
+app.get("/health", healthCheck);
+app.get("/api/health", healthCheck);
 app.get("/", (req, res) => {
     res.json({ status: "Molabs POS API is running smoothly", version: "1.0.0" });
 });
 app.get("/favicon.ico", (req, res) => res.status(204).end());
 
 // Auth Routes
-app.post("/api/auth/register", AuthController.register);
-app.post("/api/auth/login", AuthController.login);
+app.post("/api/auth/register", loginLimiter, AuthController.register);
+app.post("/api/auth/login", loginLimiter, AuthController.login);
 app.post("/api/auth/verify-otp", otpLimiter, AuthController.verifyOtp);
+app.post("/api/auth/logout", AuthController.logout);
 app.get("/api/auth/me", authenticateJWT, AuthController.getProfile);
+app.post("/api/auth/change-password", authenticateJWT, loginLimiter, AuthController.changePassword);
 
 // PWA & Security Logging Routes
-app.post("/api/auth/log_application_error", AuthController.logEvent);
-app.post("/api/auth/log_security_event", AuthController.logEvent);
-app.post("/api/auth/log_pwa_security_event", AuthController.logEvent);
-app.post("/api/auth/validate_input_data", AuthController.validateData);
-app.post("/api/auth/validate_pwa_cache_integrity", AuthController.validateData);
+app.post("/api/auth/log_application_error", logPayloadSizeLimiter, loggingLimiter, AuthController.logEvent);
+app.post("/api/auth/log_security_event", logPayloadSizeLimiter, loggingLimiter, AuthController.logEvent);
+app.post("/api/auth/log_pwa_security_event", logPayloadSizeLimiter, loggingLimiter, AuthController.logEvent);
+app.post("/api/auth/validate_input_data", logPayloadSizeLimiter, loggingLimiter, AuthController.validateData);
+app.post("/api/auth/validate_pwa_cache_integrity", logPayloadSizeLimiter, loggingLimiter, AuthController.validateCacheIntegrity);
 
 // Product Routes
 app.get("/api/categories", authenticateJWT, CategoryController.list);
@@ -226,7 +340,7 @@ app.get("/api/sales", authenticateJWT, SalesController.getAllSales);
 app.post("/api/sales/checkouts", authenticateJWT, requireRoles(["cashier", "admin"]), CheckoutController.reserve);
 app.get("/api/sales/checkouts/:checkoutSessionId", authenticateJWT, requireRoles(["cashier", "admin"]), CheckoutController.get);
 app.post("/api/sales/checkouts/:checkoutSessionId/cancel", authenticateJWT, requireRoles(["cashier", "admin"]), CheckoutController.cancel);
-app.post("/api/sales", authenticateJWT, SalesController.createSale);
+app.post("/api/sales", authenticateJWT, requireRoles(["cashier", "admin"]), SalesController.createSale);
 app.get("/api/store-credits/:barcode", authenticateJWT, requireRoles(["cashier", "admin"]), SalesController.getStoreCreditBalance);
 app.post("/api/sales/park", authenticateJWT, SalesController.parkSale);
 app.get("/api/sales/parked", authenticateJWT, SalesController.getParkedSales);
@@ -303,6 +417,7 @@ app.get("/api/inventory/movements", authenticateJWT, StockMovementController.lis
 
 // Admin user management and settings
 app.get("/api/users", authenticateJWT, requireRole("admin"), UserAdminController.listUsers);
+app.post("/api/users", authenticateJWT, requireRole("admin"), UserAdminController.createUser);
 app.put("/api/users/:id", authenticateJWT, requireRole("admin"), UserAdminController.updateUser);
 app.put("/api/users/:id/role", authenticateJWT, requireRole("admin"), UserAdminController.setUserRole);
 app.delete("/api/users/:id", authenticateJWT, requireRole("admin"), UserAdminController.deleteUser);
@@ -356,6 +471,7 @@ app.post("/api/webhooks/mpesa/callback", PaymentController.mpesaCallback);
 app.post("/api/webhooks/mpesa/c2b/validation", PaymentController.mpesaC2bValidation);
 app.post("/api/webhooks/mpesa/c2b/confirmation", PaymentController.mpesaC2bConfirmation);
 app.post("/api/webhooks/pesapal/ipn", PaymentController.pesapalWebhook);
+app.get("/api/webhooks/pesapal/ipn", PaymentController.pesapalWebhook);
 
 // Sample protected route
 app.get("/api/admin-only", authenticateJWT, requireRole("admin"), (req, res) => {
@@ -368,30 +484,35 @@ app.use((req, res, next) => {
 });
 
 // Global error handler
-app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
-    console.error(err.stack);
+app.use((err: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error(err instanceof Error ? err.stack : err);
     res.status(500).json({ error: "Internal Server Error" });
 });
 
 export const startServer = async () => {
     try {
-        await AppDataSource.initialize();
-        console.log("Database connection established smoothly and tables synchronized.");
+        if (process.env.NODE_ENV === "production") {
+            const emailConfigurationIssues = getOtpEmailConfigurationIssues();
+            if (emailConfigurationIssues.length > 0) {
+                throw new Error(
+                    `Production email delivery is required for OTP login: ${emailConfigurationIssues.join(", ")}.`,
+                );
+            }
+        }
 
-        const { AccountingService } = require("./services/AccountingService");
+        await AppDataSource.initialize();
+        console.log("Database connection established.");
+
         await AccountingService.initChartOfAccounts(AppDataSource.manager);
         console.log("Chart of accounts initialized.");
 
-        const { WarehouseService } = require("./services/WarehouseService");
         await WarehouseService.initDefaultWarehouse(AppDataSource.manager);
 
-        const { TaxService } = require("./services/TaxService");
         await TaxService.initDefaultTaxClass(AppDataSource.manager);
 
-        const { AdminSetupService } = require("./services/AdminSetupService");
         await AdminSetupService.initDefaultAdmin(AppDataSource.manager);
 
-        SocketService.init(httpServer);
+        await SocketService.init(httpServer);
         CronService.init();
 
         await new Promise<void>((resolve) => {
@@ -401,11 +522,39 @@ export const startServer = async () => {
             });
         });
     } catch (error) {
-        console.error("FATAL: TypeORM connection error:", error);
+        console.error("FATAL: API startup failed:", error);
         process.exit(1);
     }
 };
 
 if (require.main === module) {
+    let shuttingDown = false;
+    const shutdown = async (signal: NodeJS.Signals) => {
+        if (shuttingDown) return;
+        shuttingDown = true;
+        console.log(`Received ${signal}; shutting down gracefully.`);
+        CronService.stop();
+
+        const forcedShutdown = setTimeout(() => {
+            console.error("Graceful shutdown timed out; closing active HTTP connections.");
+            httpServer.closeAllConnections();
+            process.exit(1);
+        }, 30000);
+        forcedShutdown.unref();
+
+        try {
+            await SocketService.close();
+            if (AppDataSource.isInitialized) {
+                await AppDataSource.destroy();
+            }
+            clearTimeout(forcedShutdown);
+        } catch (error) {
+            console.error("Graceful shutdown failed.", error);
+            process.exitCode = 1;
+        }
+    };
+
+    process.once("SIGTERM", () => void shutdown("SIGTERM"));
+    process.once("SIGINT", () => void shutdown("SIGINT"));
     startServer();
 }

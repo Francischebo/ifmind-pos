@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useState, useEffect } from "react";
 import { ApiService } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -35,11 +35,7 @@ export function LoyaltyRedemption({
   const [pointsValue, setPointsValue] = useState(1); // KES per point
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    loadData();
-  }, [customerId]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
     try {
       const [members, settingsMap] = await Promise.all([
@@ -69,7 +65,11 @@ export function LoyaltyRedemption({
     } finally {
       setLoading(false);
     }
-  };
+  }, [customerId]);
+
+  useEffect(() => {
+    void loadData();
+  }, [loadData]);
 
   if (loading) {
     return (

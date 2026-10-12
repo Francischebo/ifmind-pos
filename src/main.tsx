@@ -19,13 +19,23 @@ window.addEventListener('unhandledrejection', function(event) {
 });
 
 
-// Register service worker for offline capability
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    // The service worker is automatically registered by vite-plugin-pwa
-    // This ensures all assets are cached for offline use
-    console.log('[PWA] Service worker support detected');
-  });
+if ("serviceWorker" in navigator && import.meta.env.PROD) {
+  const registerServiceWorker = () => {
+    void navigator.serviceWorker.register("/sw.js", { scope: "/" }).then((registration) => {
+      console.info("[PWA] Service worker registered", registration.scope);
+      void registration.update().catch((error) => {
+        console.warn("[PWA] Background service worker update check failed:", error);
+      });
+    }).catch((error: unknown) => {
+      console.error("[PWA] Service worker registration failed:", error);
+    });
+  };
+
+  if (document.readyState === "complete") {
+    registerServiceWorker();
+  } else {
+    window.addEventListener("load", registerServiceWorker, { once: true });
+  }
 }
 
 createRoot(document.getElementById("root")!).render(<App />);

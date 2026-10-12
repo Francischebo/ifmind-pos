@@ -28,9 +28,9 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarFooter,
-  useSidebar,
 } from "@/components/ui/sidebar";
-import { useAuth } from "@/hooks/useAuth";
+import { useSidebar } from "@/components/ui/sidebar-context";
+import { useAuth } from "@/hooks/useAuthContext";
 import { Button } from "./ui/button";
 import { CompanyBrand } from "@/components/CompanyBranding";
 

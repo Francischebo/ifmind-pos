@@ -61,12 +61,23 @@ const handler = async (req: Request): Promise<Response> => {
       });
     }
 
+    const escapeHtml = (str: unknown): string => {
+      if (typeof str !== "string") return "";
+      return str.replace(/[&<>'"]/g, (tag) => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        "'": '&#39;',
+        '"': '&quot;',
+      }[tag] || tag));
+    };
+
     const lowStockHtml = lowStockProducts.map(product => `
       <tr style="${product.stock_on_hand === 0 ? 'background-color: #fee2e2;' : 'background-color: #fef3c7;'}">
-        <td style="padding: 12px; border: 1px solid #e5e7eb;">${product.name}</td>
-        <td style="padding: 12px; border: 1px solid #e5e7eb; text-align: center;">${product.sku}</td>
-        <td style="padding: 12px; border: 1px solid #e5e7eb; text-align: center; font-weight: bold; color: ${product.stock_on_hand === 0 ? '#dc2626' : '#f59e0b'};">${product.stock_on_hand}</td>
-        <td style="padding: 12px; border: 1px solid #e5e7eb; text-align: center;">${product.reorder_level}</td>
+        <td style="padding: 12px; border: 1px solid #e5e7eb;">${escapeHtml(product.name)}</td>
+        <td style="padding: 12px; border: 1px solid #e5e7eb; text-align: center;">${escapeHtml(product.sku)}</td>
+        <td style="padding: 12px; border: 1px solid #e5e7eb; text-align: center; font-weight: bold; color: ${product.stock_on_hand === 0 ? '#dc2626' : '#f59e0b'};">${Number(product.stock_on_hand) || 0}</td>
+        <td style="padding: 12px; border: 1px solid #e5e7eb; text-align: center;">${Number(product.reorder_level) || 0}</td>
         <td style="padding: 12px; border: 1px solid #e5e7eb; text-align: center;">
           <span style="background-color: ${product.stock_on_hand === 0 ? '#dc2626' : '#f59e0b'}; color: white; padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: bold;">
             ${product.stock_on_hand === 0 ? 'OUT OF STOCK' : 'LOW STOCK'}
@@ -156,7 +167,7 @@ const handler = async (req: Request): Promise<Response> => {
         ...corsHeaders,
       },
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error("Error in send-inventory-alerts function:", error);
     return new Response(
       JSON.stringify({ error: "Failed to send alerts", details: error.message }),

@@ -84,11 +84,24 @@ export const normalizeProductImportRow = (row: Record<string, unknown>) => {
         barcode: String(getValue("barcode", "product_barcode") ?? "").trim() || null,
         name: String(getValue("name", "product_name", "product name") ?? "").trim(),
         category_name: String(getValue("category_name", "category name", "category", "product_category") ?? "").trim(),
-        tax_class_name: String(getValue("tax_class_name", "tax class name", "tax_class", "tax class", "tax_name") ?? "").trim(),
+        tax_class_name: String(
+            getValue(
+                "tax_class_name", "tax class name", "tax_class", "tax class",
+                "tax_type", "tax type", "tax_category", "tax category",
+                "tax_code", "tax code", "tax_name", "tax name",
+                "kra_tax", "kra tax", "kra_tax_type", "kra tax type",
+                "vat_type", "vat type", "vat_class", "vat class",
+                "tax", "vat",
+            ) ?? ""
+        ).trim(),
         warehouse_name: String(getValue("warehouse_name", "warehouse name", "warehouse", "warehouse_name_1") ?? "").trim(),
         unit_cost: getValue("unit_cost", "cost_price", "purchase_price", "purchase cost", "cost"),
         retail_price: getValue("retail_price", "selling_price", "sale_price", "selling price", "sale price"),
-        tax_rate: getValue("tax_rate", "vat_rate"),
+        tax_rate: getValue(
+            "tax_rate", "tax rate", "tax_percent", "tax percent", "tax percentage",
+            "tax_pct", "tax pct", "tax_%", "tax%", "vat_rate", "vat rate",
+            "vat_percent", "vat percent", "vat_%", "vat%", "vat_pct",
+        ),
         unit_of_measure: String(getValue("unit_of_measure", "unit of measure", "uom", "unit") ?? "piece").trim() || "piece",
         reorder_level: getValue("reorder_level", "reorder level", "minimum_stock", "minimum stock"),
         stock_on_hand: getValue("stock_on_hand", "stock on hand", "opening_stock", "opening stock", "quantity", "opening quantity"),
@@ -172,6 +185,148 @@ export const selectProductImportWarehouse = <T extends { name: string; is_main: 
     return undefined;
 };
 
+export const matchProductImportTaxClass = (
+    taxInput: { taxClassName?: string; taxRate?: unknown },
+    taxClasses: TaxClass[],
+    defaultTaxClass?: TaxClass | null,
+): TaxClass | undefined => {
+    if (!taxClasses || taxClasses.length === 0) {
+        return defaultTaxClass ?? undefined;
+    }
+
+    const rawName = String(taxInput.taxClassName ?? "").trim();
+    const rawRate = taxInput.taxRate;
+    const defaultTax = defaultTaxClass ?? taxClasses.find((tc) => tc.is_default) ?? taxClasses[0];
+
+    // Case 1: If rawName is empty, check rawRate
+    if (!rawName) {
+        if (rawRate !== undefined && rawRate !== null && String(rawRate).trim() !== "") {
+            const parsedRate = parseProductImportNumber(rawRate);
+            if (Number.isFinite(parsedRate)) {
+                const rateMatch = taxClasses.find((tc) => Math.abs(Number(tc.rate) - parsedRate) < 0.01);
+                if (rateMatch) return rateMatch;
+            }
+        }
+        return defaultTax;
+    }
+
+    const cleanInput = rawName
+        .normalize("NFKD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, "");
+
+    // 1. Exact or normalized name match
+    for (const tc of taxClasses) {
+        const cleanName = tc.name
+            .normalize("NFKD")
+            .replace(/[\u0300-\u036f]/g, "")
+            .toLowerCase()
+            .replace(/[^a-z0-9]/g, "");
+        if (cleanName === cleanInput) {
+            return tc;
+        }
+    }
+
+    // 2. KRA code & keyword matching
+    // KRA Class A / Exempt (0%)
+    if (
+        cleanInput === "a" ||
+        cleanInput === "classa" ||
+        cleanInput === "typea" ||
+        cleanInput.includes("exempt") ||
+        cleanInput === "ex"
+    ) {
+        const exempt = taxClasses.find((tc) =>
+            Number(tc.rate) === 0 && tc.name.toLowerCase().includes("exempt"),
+        ) || taxClasses.find((tc) => Number(tc.rate) === 0);
+        if (exempt) return exempt;
+    }
+
+    // KRA Class B / Standard Rate (16%)
+    if (
+        cleanInput === "b" ||
+        cleanInput === "classb" ||
+        cleanInput === "typeb" ||
+        cleanInput === "vat" ||
+        cleanInput === "standard" ||
+        cleanInput.startsWith("standard") ||
+        cleanInput === "std" ||
+        cleanInput === "general"
+    ) {
+        const standard = taxClasses.find((tc) => Math.abs(Number(tc.rate) - 16) < 0.01) || defaultTax;
+        if (standard) return standard;
+    }
+
+    // KRA Class C / Zero Rated (0%)
+    if (
+        cleanInput === "c" ||
+        cleanInput === "classc" ||
+        cleanInput === "typec" ||
+        cleanInput.includes("zero") ||
+        cleanInput === "zr" ||
+        cleanInput === "zerorated" ||
+        cleanInput === "zerorate"
+    ) {
+        const zero = taxClasses.find((tc) =>
+            Number(tc.rate) === 0 && tc.name.toLowerCase().includes("zero"),
+        ) || taxClasses.find((tc) => Number(tc.rate) === 0);
+        if (zero) return zero;
+    }
+
+    // KRA Class D / Non-VAT (0%)
+    if (cleanInput === "d" || cleanInput === "classd" || cleanInput === "typed" || cleanInput.includes("nonvat")) {
+        const nonVat = taxClasses.find((tc) => Number(tc.rate) === 0) || defaultTax;
+        if (nonVat) return nonVat;
+    }
+
+    // KRA Class E / Special (8%)
+    if (
+        cleanInput === "e" ||
+        cleanInput === "classe" ||
+        cleanInput === "typee" ||
+        cleanInput.includes("special") ||
+        cleanInput.includes("fuel") ||
+        cleanInput.includes("petroleum")
+    ) {
+        const special = taxClasses.find((tc) => Math.abs(Number(tc.rate) - 8) < 0.01);
+        if (special) return special;
+    }
+
+    // 3. Numeric rate extracted from rawName (e.g. "16%", "16", "VAT 16%", "0%", "8%")
+    const extractedNumberMatch = rawName.match(/(\d+(?:\.\d+)?)\s*%?/);
+    if (extractedNumberMatch) {
+        const extractedRate = parseFloat(extractedNumberMatch[1]);
+        if (Number.isFinite(extractedRate)) {
+            const rateMatch = taxClasses.find((tc) => Math.abs(Number(tc.rate) - extractedRate) < 0.01);
+            if (rateMatch) return rateMatch;
+        }
+    }
+
+    // 4. Also check rawRate if provided
+    if (rawRate !== undefined && rawRate !== null && String(rawRate).trim() !== "") {
+        const parsedRate = parseProductImportNumber(rawRate);
+        if (Number.isFinite(parsedRate)) {
+            const rateMatch = taxClasses.find((tc) => Math.abs(Number(tc.rate) - parsedRate) < 0.01);
+            if (rateMatch) return rateMatch;
+        }
+    }
+
+    // 5. Partial / substring match on tax class names
+    for (const tc of taxClasses) {
+        const cleanName = tc.name
+            .normalize("NFKD")
+            .replace(/[\u0300-\u036f]/g, "")
+            .toLowerCase()
+            .replace(/[^a-z0-9]/g, "");
+        if (cleanInput.length >= 3 && (cleanName.includes(cleanInput) || cleanInput.includes(cleanName))) {
+            return tc;
+        }
+    }
+
+    return undefined;
+};
+
 export const getProductImportPersistenceError = (error: unknown): string => {
     const databaseError = error && typeof error === "object"
         ? error as { code?: string; constraint?: string; column?: string; driverError?: { code?: string; constraint?: string; column?: string } }
@@ -223,12 +378,19 @@ const PRODUCT_ALLOWED_FIELDS = new Set([
     "variant_attributes",
 ]);
 
-export const sanitizeProductPayload = (input: unknown) => {
+type ProductPayload = Partial<Pick<
+    Product,
+    "sku" | "barcode" | "name" | "unit_cost" | "retail_price" | "tax_class_id" | "tax_rate" |
+    "unit_of_measure" | "reorder_level" | "stock_on_hand" | "location" | "parent_id" | "is_parent" |
+    "variant_attributes"
+>> & { category_id?: string };
+
+export const sanitizeProductPayload = (input: unknown): ProductPayload => {
     if (!input || typeof input !== "object" || Array.isArray(input)) {
-        return {} as Record<string, any>;
+        return {};
     }
 
-    const sanitized: Record<string, any> = {};
+    const sanitized: ProductPayload = {};
 
     for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
         if (!PRODUCT_ALLOWED_FIELDS.has(key) || value === undefined || value === null) {
@@ -240,7 +402,10 @@ export const sanitizeProductPayload = (input: unknown) => {
             if (trimmed === "" && (key === "sku" || key === "name" || key === "location" || key === "unit_of_measure")) {
                 continue;
             }
-            sanitized[key] = trimmed;
+            if (key === "sku" || key === "barcode" || key === "name" || key === "tax_class_id" ||
+                key === "unit_of_measure" || key === "location" || key === "parent_id" || key === "category_id") {
+                sanitized[key] = trimmed;
+            }
             continue;
         }
 
@@ -248,17 +413,23 @@ export const sanitizeProductPayload = (input: unknown) => {
             if (!Number.isFinite(value)) {
                 continue;
             }
+            if (key === "unit_cost" || key === "retail_price" || key === "tax_rate" ||
+                key === "reorder_level" || key === "stock_on_hand") {
+                sanitized[key] = value;
+            }
+            continue;
+        }
+
+        if (typeof value === "boolean" && key === "is_parent") {
             sanitized[key] = value;
             continue;
         }
 
-        if (typeof value === "boolean") {
-            sanitized[key] = value;
-            continue;
-        }
-
-        if (typeof value === "object") {
-            sanitized[key] = value;
+        if (key === "variant_attributes" && value !== null && typeof value === "object" && !Array.isArray(value)) {
+            const attributes = Object.entries(value).filter((entry): entry is [string, string | number | boolean] =>
+                typeof entry[1] === "string" || typeof entry[1] === "number" || typeof entry[1] === "boolean",
+            );
+            sanitized.variant_attributes = Object.fromEntries(attributes);
         }
     }
 
@@ -330,13 +501,13 @@ export class ProductController {
             try {
                 const categories = await queryRunner.manager.find(Category);
                 const taxClasses = await queryRunner.manager.find(TaxClass);
+                const defaultTaxClass = taxClasses.find((tc) => tc.is_default) ?? taxClasses[0] ?? null;
                 const warehouses = await queryRunner.manager.find(Warehouse, { where: { is_active: true } });
                 const productUnitSetting = await queryRunner.manager.findOneBy(Setting, {
                     key: "product_unit_of_measures",
                 });
                 const configuredUnits = parseProductUnitOfMeasures(productUnitSetting?.value);
                 const categoryByName = new Map(categories.map((category) => [category.name.trim().toLowerCase(), category]));
-                const taxClassByName = new Map(taxClasses.map((taxClass) => [taxClass.name.trim().toLowerCase(), taxClass]));
 
                 for (const [index, rawRow] of rows.entries()) {
                     const row = normalizeProductImportRow(rawRow as Record<string, unknown>);
@@ -380,12 +551,35 @@ export class ProductController {
                         continue;
                     }
 
-                    const taxClass = row.tax_class_name
-                        ? taxClassByName.get(row.tax_class_name.toLowerCase())
-                        : null;
-                    if (row.tax_class_name && !taxClass) {
-                        errors.push(`Row ${rowNumber}: Tax class "${row.tax_class_name}" was not found.`);
-                        continue;
+                    let taxClass = matchProductImportTaxClass(
+                        { taxClassName: row.tax_class_name, taxRate: row.tax_rate },
+                        taxClasses,
+                        defaultTaxClass,
+                    );
+
+                    if (!taxClass && row.tax_class_name) {
+                        // Dynamically create unrecognized tax type so bulk import is never blocked
+                        const rawRateMatch = row.tax_class_name.match(/(\d+(?:\.\d+)?)\s*%?/);
+                        const rawParsedRate = rawRateMatch
+                            ? parseFloat(rawRateMatch[1])
+                            : Number.isFinite(parseProductImportNumber(row.tax_rate))
+                            ? parseProductImportNumber(row.tax_rate)
+                            : (defaultTaxClass ? Number(defaultTaxClass.rate) : 16.0);
+
+                        const safeRate = Number.isFinite(rawParsedRate) && rawParsedRate >= 0 && rawParsedRate <= 100
+                            ? rawParsedRate
+                            : 16.0;
+
+                        const newTaxClass = new TaxClass();
+                        newTaxClass.name = row.tax_class_name.trim();
+                        newTaxClass.rate = safeRate;
+                        newTaxClass.is_default = false;
+                        taxClass = await queryRunner.manager.save(newTaxClass);
+                        taxClasses.push(taxClass);
+                    }
+
+                    if (!taxClass) {
+                        taxClass = defaultTaxClass ?? null;
                     }
 
                     if (row.unit_cost === undefined || String(row.unit_cost).trim() === "") {
@@ -400,7 +594,12 @@ export class ProductController {
 
                     const numericUnitCost = parseProductImportNumber(row.unit_cost);
                     const numericRetailPrice = parseProductImportNumber(row.retail_price);
-                    const numericTaxRate = parseProductImportNumber(row.tax_rate ?? 16);
+                    const rawNumericTaxRate = parseProductImportNumber(row.tax_rate ?? (taxClass ? taxClass.rate : 16));
+                    const numericTaxRate = taxClass
+                        ? Number(taxClass.rate)
+                        : Number.isFinite(rawNumericTaxRate)
+                        ? rawNumericTaxRate
+                        : 16.0;
                     const numericReorderLevel = parseProductImportNumber(row.reorder_level ?? 0);
                     const numericStock = parseProductImportNumber(row.stock_on_hand ?? 0);
 
@@ -470,8 +669,8 @@ export class ProductController {
 
                     const product = new Product();
                     Object.assign(product, productPayload);
-                    product.category = category as any;
-                    product.tax_class = taxClass as any;
+                    product.category = category ?? null;
+                    product.tax_class = taxClass ?? null;
 
                     const savepoint = `product_import_row_${index}`;
                     await queryRunner.query(`SAVEPOINT ${savepoint}`);
@@ -641,15 +840,22 @@ export class ProductController {
             }
 
             const category = category_id ? await queryRunner.manager.findOneBy(Category, { id: category_id }) : null;
-            const tax_class = tax_class_id ? await queryRunner.manager.findOneBy(TaxClass, { id: tax_class_id }) : null;
+            let tax_class = tax_class_id ? await queryRunner.manager.findOneBy(TaxClass, { id: tax_class_id }) : null;
+            if (!tax_class) {
+                tax_class = await queryRunner.manager.findOne(TaxClass, { where: { is_default: true } }) ??
+                    await queryRunner.manager.findOne(TaxClass, { where: {} });
+            }
+            if (tax_class && productData.tax_rate === undefined) {
+                productData.tax_rate = Number(tax_class.rate);
+            }
 
             // Check if this is a parent with variants
             if (variants.length > 0) {
                 // Create Parent
                 const parent = new Product();
                 Object.assign(parent, productData);
-                parent.category = category as any;
-                parent.tax_class = tax_class as any;
+                parent.category = category;
+                parent.tax_class = tax_class;
                 parent.is_parent = true;
                 parent.stock_on_hand = 0; // Parent itself doesn't hold physical stock, children do
 
@@ -661,8 +867,8 @@ export class ProductController {
                     const child = new Product();
                     Object.assign(child, productData); // Base data
                     Object.assign(child, sanitizedVariant); // Override with variant specific data (sku, barcode, price, etc.)
-                    child.category = category as any;
-                    child.tax_class = tax_class as any;
+                    child.category = category;
+                    child.tax_class = tax_class;
                     child.parent = savedParent;
                     child.is_parent = false;
                     const savedChild = await queryRunner.manager.save(child);
@@ -684,8 +890,8 @@ export class ProductController {
                 // Create standard single product
                 const product = new Product();
                 Object.assign(product, productData);
-                product.category = category as any;
-                product.tax_class = tax_class as any;
+                product.category = category;
+                product.tax_class = tax_class;
 
                 const savedProduct = await queryRunner.manager.save(product);
                 if (savedProduct.stock_on_hand > 0 && initialWarehouse) {

@@ -50,6 +50,15 @@ interface DeliveryNoteItem {
   products: { name: string; sku: string } | null;
 }
 
+interface DeliveryNoteResponse extends Omit<DeliveryNote, "delivery_date" | "vendors" | "purchase_orders"> {
+  vendor: DeliveryNote["vendors"];
+  purchase_order: DeliveryNote["purchase_orders"];
+}
+
+interface DeliveryNoteDetailResponse extends DeliveryNoteResponse {
+  items: Array<Omit<DeliveryNoteItem, "products"> & { product: DeliveryNoteItem["products"] }>;
+}
+
 export default function DeliveryNotes() {
   const [deliveryNotes, setDeliveryNotes] = useState<DeliveryNote[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
@@ -64,7 +73,7 @@ export default function DeliveryNotes() {
   const loadDeliveryNotes = async () => {
     setLoading(true);
     try {
-      const data = await ApiService.get<any[]>("/delivery-notes");
+      const data = await ApiService.get<DeliveryNoteResponse[]>("/delivery-notes");
       setDeliveryNotes(
         (data || []).map((note) => ({
           ...note,
@@ -81,9 +90,9 @@ export default function DeliveryNotes() {
 
   const loadNoteItems = async (noteId: string) => {
     try {
-      const note = await ApiService.get<any>(`/delivery-notes/${noteId}`);
+      const note = await ApiService.get<DeliveryNoteDetailResponse>(`/delivery-notes/${noteId}`);
       setNoteItems(
-        (note.items || []).map((item: any) => ({
+        (note.items || []).map((item) => ({
           ...item,
           products: item.product,
         })),

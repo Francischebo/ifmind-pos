@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { AuthenticatedRequest } from "../middleware/auth";
 import { AppDataSource } from "../data-source";
 import { Sale } from "../entity/Sale";
 import { MpesaTransaction } from "../entity/MpesaTransaction";
@@ -11,6 +12,19 @@ import { WarehouseStock } from "../entity/WarehouseStock";
 import { ProductBatch } from "../entity/ProductBatch";
 import { Shift, ShiftStatus } from "../entity/Shift";
 import { PaymentCheckoutSession } from "../entity/PaymentCheckoutSession";
+
+interface MpesaCallbackMetadataItem {
+    Name?: string;
+    Value?: unknown;
+}
+
+interface MpesaStkCallback {
+    CheckoutRequestID?: unknown;
+    MerchantRequestID?: unknown;
+    ResultCode?: unknown;
+    ResultDesc?: unknown;
+    CallbackMetadata?: { Item?: MpesaCallbackMetadataItem[] };
+}
 
 export const hashMpesaCallbackToken = (token: string) =>
     createHash("sha256").update(token).digest("hex");
@@ -202,7 +216,7 @@ export const sanitizeMpesaStkPayload = (input: unknown) => {
 };
 
 export class PaymentController {
-    static async initiateMpesaStk(req: any, res: Response) {
+    static async initiateMpesaStk(req: AuthenticatedRequest, res: Response) {
         let transaction: MpesaTransaction | null = null;
         let stkRequestStarted = false;
         try {
@@ -221,13 +235,13 @@ export class PaymentController {
             const parsedAmount = amount;
             if (!req.user?.id) return res.status(401).json({ error: "Authenticated cashier is required" });
             const openShift = await AppDataSource.getRepository(Shift).findOneBy({
-                cashier_id: req.user.id,
+                cashier_id: req.user!.id,
                 status: ShiftStatus.OPEN,
             });
             if (!openShift) return res.status(400).json({ error: "Open a shift before requesting an M-Pesa payment" });
             const checkoutSession = await AppDataSource.getRepository(PaymentCheckoutSession).findOneBy({
                 id: checkout_session_id,
-                cashier_id: req.user.id,
+                cashier_id: req.user!.id,
                 status: "reserved",
             });
             if (!checkoutSession) return res.status(409).json({ error: "Reserve stock for this checkout before requesting M-Pesa" });
@@ -317,14 +331,14 @@ export class PaymentController {
 
             const reservationResult = await AppDataSource.transaction(async (manager) => {
                 const shift = await manager.findOne(Shift, {
-                    where: { cashier_id: req.user.id, status: ShiftStatus.OPEN },
+                    where: { cashier_id: req.user!.id, status: ShiftStatus.OPEN },
                     lock: { mode: "pessimistic_write" },
                 });
                 if (!shift) {
                     return { ok: false as const, error: "Open a shift before requesting an M-Pesa payment", status: 409 };
                 }
                 const lockedSession = await manager.findOne(PaymentCheckoutSession, {
-                    where: { id: checkout_session_id, cashier_id: req.user.id, status: "reserved" },
+                    where: { id: checkout_session_id, cashier_id: req.user!.id, status: "reserved" },
                     lock: { mode: "pessimistic_write" },
                 });
                 if (!lockedSession) {
@@ -336,7 +350,7 @@ export class PaymentController {
                     return { ok: false as const, error: "Payment amounts do not match the reserved checkout", status: 400 };
                 }
                 const existingTransactions = await manager.find(MpesaTransaction, {
-                    where: { checkout_session_id, cashier_id: req.user.id },
+                    where: { checkout_session_id, cashier_id: req.user!.id },
                 });
                 if (existingTransactions.some((item) => item.status === "pending")) {
                     return { ok: false as const, error: "An M-Pesa request is already pending for this checkout", status: 409 };
@@ -354,7 +368,7 @@ export class PaymentController {
                 }
                 const pendingTransaction = manager.create(MpesaTransaction, {
                     sale_id: null,
-                    cashier_id: req.user.id,
+                    cashier_id: req.user!.id,
                     checkout_session_id,
                     phone_number: formattedPhone,
                     amount: parsedAmount,
@@ -407,7 +421,13 @@ export class PaymentController {
                     TransactionDesc: `POS checkout ${checkout_session_id.slice(0, 8)}`,
                 }),
             });
-            const stkData = await stkResponse.json() as any;
+            const stkData = await stkResponse.json() as {
+                ResponseCode?: string;
+                errorMessage?: string;
+                ResponseDescription?: string;
+                CheckoutRequestID?: string;
+                MerchantRequestID?: string;
+            };
             if (stkData.ResponseCode !== "0") {
                 transaction.status = "failed";
                 transaction.result_desc = stkData.errorMessage || stkData.ResponseDescription || "STK Push failed";
@@ -490,7 +510,7 @@ export class PaymentController {
         }
     }
 
-    static async registerMpesaC2bUrls(req: any, res: Response) {
+    static async registerMpesaC2bUrls(req: AuthenticatedRequest, res: Response) {
         try {
             const repository = AppDataSource.getRepository(Setting);
             const paybill = await repository.findOneBy({ key: "mpesa_paybill" });
@@ -557,7 +577,7 @@ export class PaymentController {
         }
     }
 
-    static async initiateMpesaPaybill(req: any, res: Response) {
+    static async initiateMpesaPaybill(req: AuthenticatedRequest, res: Response) {
         try {
             if (!req.user?.id) return res.status(401).json({ message: "Authenticated cashier is required" });
             const checkoutSessionId = typeof req.body?.checkout_session_id === "string"
@@ -595,14 +615,14 @@ export class PaymentController {
             const accountReference = `POS${randomUUID().replace(/-/g, "").slice(0, 16).toUpperCase()}`;
             const intentResult = await AppDataSource.transaction(async (manager) => {
                 const shift = await manager.findOne(Shift, {
-                    where: { cashier_id: req.user.id, status: ShiftStatus.OPEN },
+                    where: { cashier_id: req.user!.id, status: ShiftStatus.OPEN },
                     lock: { mode: "pessimistic_write" },
                 });
                 if (!shift) {
                     return { ok: false as const, error: "Open a shift before accepting an M-Pesa payment", status: 409 };
                 }
                 const session = await manager.findOne(PaymentCheckoutSession, {
-                    where: { id: checkoutSessionId, cashier_id: req.user.id, status: "reserved" },
+                    where: { id: checkoutSessionId, cashier_id: req.user!.id, status: "reserved" },
                     lock: { mode: "pessimistic_write" },
                 });
                 if (!session) {
@@ -613,7 +633,7 @@ export class PaymentController {
                     return { ok: false as const, error: "Payment amounts do not match the reserved checkout", status: 400 };
                 }
                 const transactions = await manager.find(MpesaTransaction, {
-                    where: { checkout_session_id: checkoutSessionId, cashier_id: req.user.id },
+                    where: { checkout_session_id: checkoutSessionId, cashier_id: req.user!.id },
                 });
                 if (transactions.some((item) => item.status === "pending")) {
                     return { ok: false as const, error: "An M-Pesa payment is already pending for this checkout", status: 409 };
@@ -630,7 +650,7 @@ export class PaymentController {
                 }
                 const transaction = manager.create(MpesaTransaction, {
                     sale_id: null,
-                    cashier_id: req.user.id,
+                    cashier_id: req.user!.id,
                     checkout_session_id: checkoutSessionId,
                     transaction_code: `C2B_${randomUUID()}`,
                     phone_number: phoneNumber,
@@ -663,8 +683,13 @@ export class PaymentController {
     }
 
     static async mpesaC2bValidation(req: Request, res: Response) {
-        const callbackToken = typeof req.query.callback_token === "string" ? req.query.callback_token : "";
+        const callbackToken = typeof req.query.callback_token === "string"
+            ? req.query.callback_token
+            : typeof req.headers["x-callback-token"] === "string"
+                ? req.headers["x-callback-token"]
+                : "";
         if (!verifyMpesaC2bCallbackToken(callbackToken, process.env.MPESA_C2B_CALLBACK_TOKEN)) {
+            console.warn(`[SECURITY ALERT] Rejected unauthorized M-Pesa C2B validation callback from IP ${req.ip}`);
             return res.status(401).json({ ResultCode: 1, ResultDesc: "Unauthorized callback" });
         }
         const callback = parseC2bCallback(req.body);
@@ -695,8 +720,13 @@ export class PaymentController {
     }
 
     static async mpesaC2bConfirmation(req: Request, res: Response) {
-        const callbackToken = typeof req.query.callback_token === "string" ? req.query.callback_token : "";
+        const callbackToken = typeof req.query.callback_token === "string"
+            ? req.query.callback_token
+            : typeof req.headers["x-callback-token"] === "string"
+                ? req.headers["x-callback-token"]
+                : "";
         if (!verifyMpesaC2bCallbackToken(callbackToken, process.env.MPESA_C2B_CALLBACK_TOKEN)) {
+            console.warn(`[SECURITY ALERT] Rejected unauthorized M-Pesa C2B confirmation callback from IP ${req.ip}`);
             return res.status(401).json({ ResultCode: 1, ResultDesc: "Unauthorized callback" });
         }
         const callback = parseC2bCallback(req.body);
@@ -771,12 +801,15 @@ export class PaymentController {
         await queryRunner.connect();
         await queryRunner.startTransaction();
         try {
-            const callback = req.body;
-            const stkCallback = callback?.Body?.stkCallback;
+            const callback: Record<string, unknown> = req.body;
+            const callbackBody = callback.Body;
+            const stkCallback = callbackBody && typeof callbackBody === "object" && !Array.isArray(callbackBody)
+                ? (callbackBody as Record<string, unknown>).stkCallback as MpesaStkCallback | undefined
+                : undefined;
             const checkoutRequestId = stkCallback?.CheckoutRequestID;
             const callbackToken = typeof req.query.callback_token === "string" ? req.query.callback_token : "";
             const merchantRequestId = stkCallback?.MerchantRequestID;
-            if (typeof checkoutRequestId !== "string" || !checkoutRequestId.trim() ||
+            if (!stkCallback || typeof checkoutRequestId !== "string" || !checkoutRequestId.trim() ||
                 (merchantRequestId !== undefined &&
                     (typeof merchantRequestId !== "string" || !merchantRequestId.trim()))) {
                 await queryRunner.rollbackTransaction();
@@ -800,6 +833,7 @@ export class PaymentController {
 
             if (!verifyMpesaCallbackToken(callbackToken, transaction.callback_token_hash)) {
                 await queryRunner.rollbackTransaction();
+                console.warn(`[SECURITY ALERT] Rejected unauthorized M-Pesa STK callback from IP ${req.ip} for CheckoutRequestID: ${checkoutRequestId}`);
                 return res.status(401).json({ ResultCode: 1, ResultDesc: "Unauthorized callback" });
             }
 
@@ -823,9 +857,9 @@ export class PaymentController {
                 let duplicateMatches = false;
                 if (transaction.status === "completed" && resultCode === 0) {
                     const metadata = stkCallback.CallbackMetadata?.Item || [];
-                    const receipt = metadata.find((item: any) => item.Name === "MpesaReceiptNumber")?.Value;
-                    const callbackAmount = Number(metadata.find((item: any) => item.Name === "Amount")?.Value);
-                    const callbackPhone = metadata.find((item: any) => item.Name === "PhoneNumber")?.Value;
+                    const receipt = metadata.find((item) => item.Name === "MpesaReceiptNumber")?.Value;
+                    const callbackAmount = Number(metadata.find((item) => item.Name === "Amount")?.Value);
+                    const callbackPhone = metadata.find((item) => item.Name === "PhoneNumber")?.Value;
                     const normalizedPhone = normalizeMpesaPhone(callbackPhone);
                     duplicateMatches = String(receipt) === transaction.mpesa_receipt_number &&
                         Number.isFinite(callbackAmount) &&
@@ -842,7 +876,7 @@ export class PaymentController {
 
             transaction.callback_received = true;
             transaction.callback_data = callback;
-            transaction.result_desc = stkCallback.ResultDesc || null;
+            transaction.result_desc = typeof stkCallback.ResultDesc === "string" ? stkCallback.ResultDesc : null;
             if (resultCode !== 0) {
                 transaction.status = "failed";
                 await queryRunner.manager.save(transaction);
@@ -851,9 +885,9 @@ export class PaymentController {
             }
 
             const metadata = stkCallback.CallbackMetadata?.Item || [];
-            const receipt = metadata.find((item: any) => item.Name === "MpesaReceiptNumber")?.Value;
-            const callbackAmount = metadata.find((item: any) => item.Name === "Amount")?.Value;
-            const callbackPhone = metadata.find((item: any) => item.Name === "PhoneNumber")?.Value;
+            const receipt = metadata.find((item) => item.Name === "MpesaReceiptNumber")?.Value;
+            const callbackAmount = metadata.find((item) => item.Name === "Amount")?.Value;
+            const callbackPhone = metadata.find((item) => item.Name === "PhoneNumber")?.Value;
             const parsedCallbackAmount = Number(callbackAmount);
             const normalizedCallbackPhone = normalizeMpesaPhone(callbackPhone);
             if (typeof receipt !== "string" || !receipt.trim() ||
@@ -913,7 +947,7 @@ export class PaymentController {
         }
     }
 
-    static async getMpesaStatus(req: any, res: Response) {
+    static async getMpesaStatus(req: AuthenticatedRequest, res: Response) {
         try {
             const transaction = await AppDataSource.getRepository(MpesaTransaction).findOne({
                 where: { checkout_request_id: req.params.checkoutRequestId as string },
@@ -946,7 +980,7 @@ export class PaymentController {
         }
     }
 
-    static async getMpesaSessionStatus(req: any, res: Response) {
+    static async getMpesaSessionStatus(req: AuthenticatedRequest, res: Response) {
         try {
             const sessionId = String(req.params.checkoutSessionId || "");
             if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionId)) {
@@ -981,31 +1015,65 @@ export class PaymentController {
 
     static async pesapalWebhook(req: Request, res: Response) {
         try {
-            const { OrderTrackingId, OrderNotificationType, OrderMerchantReference } = req.body;
-            const signingKey = req.headers["x-pesapal-signature"] || req.headers["x-pesapal-ipn-signature"] || req.body.pesapal_ipn_signature || req.body.signature;
+            const rawBody = (req as Request & { rawBody?: Buffer }).rawBody;
+            const payload = (
+                req.body && typeof req.body === "object" && Object.keys(req.body).length > 0
+                    ? req.body
+                    : req.query
+            ) as Record<string, unknown>;
 
-            if (!OrderTrackingId || !OrderNotificationType || !OrderMerchantReference) {
+            const orderTrackingId = typeof payload.OrderTrackingId === "string"
+                ? payload.OrderTrackingId.trim()
+                : typeof payload.pesapal_transaction_tracking_id === "string"
+                    ? payload.pesapal_transaction_tracking_id.trim()
+                    : "";
+            const orderNotificationType = typeof payload.OrderNotificationType === "string"
+                ? payload.OrderNotificationType.trim()
+                : typeof payload.pesapal_notification_type === "string"
+                    ? payload.pesapal_notification_type.trim()
+                    : "";
+            const orderMerchantReference = typeof payload.OrderMerchantReference === "string"
+                ? payload.OrderMerchantReference.trim()
+                : typeof payload.pesapal_merchant_reference === "string"
+                    ? payload.pesapal_merchant_reference.trim()
+                    : "";
+
+            const signingKey = (
+                req.headers["x-pesapal-signature"] ||
+                req.headers["x-pesapal-ipn-signature"] ||
+                req.headers["x-signature"] ||
+                payload.pesapal_ipn_signature ||
+                payload.signature ||
+                payload.Signature ||
+                req.query.pesapal_ipn_signature ||
+                req.query.signature
+            );
+
+            if (!orderTrackingId || !orderNotificationType || !orderMerchantReference) {
+                console.warn(`[SECURITY ALERT] Rejected Pesapal webhook from IP ${req.ip} - missing required callback fields.`);
                 return res.status(400).json({ message: "Missing required Pesapal callback fields" });
             }
 
-            if (!verifyPesapalSignature(req.body, String(signingKey || ""))) {
-                return res.status(401).json({ message: "Unauthorized: Invalid Pesapal IPN signature" });
+            const signatureString = typeof signingKey === "string" ? signingKey.trim() : "";
+            if (!verifyPesapalSignature(payload, signatureString, rawBody)) {
+                console.warn(`[SECURITY ALERT] Rejected unauthenticated Pesapal IPN from IP ${req.ip} for OrderTrackingId: ${orderTrackingId}`);
+                return res.status(401).json({ message: "Unauthorized: Invalid or missing Pesapal IPN signature" });
             }
 
-            if (OrderNotificationType === "IPNCHANGE") {
+            if (orderNotificationType === "IPNCHANGE") {
                 const queryRunner = AppDataSource.createQueryRunner();
                 await queryRunner.connect();
                 await queryRunner.startTransaction();
                 try {
                     const saleRepo = queryRunner.manager.getRepository(Sale);
                     const sale = await saleRepo.findOne({
-                        where: { pesapal_tracking_id: OrderTrackingId },
+                        where: { pesapal_tracking_id: orderTrackingId },
                         lock: { mode: "pessimistic_write" },
                     });
                     
                     if (!sale) {
                         await queryRunner.rollbackTransaction();
-                        return res.status(404).json({ message: "Sale not found for tracking id " + OrderTrackingId });
+                        return res.status(404).json({ message: "Sale not found for tracking id " + orderTrackingId });
                     }
                     
                     if (sale.pesapal_status === "completed") {
@@ -1028,10 +1096,10 @@ export class PaymentController {
 
                     await queryRunner.commitTransaction();
 
-                    res.status(200).json({
-                        orderNotificationType: req.body.OrderNotificationType,
-                        orderTrackingId: req.body.OrderTrackingId,
-                        orderMerchantReference: req.body.OrderMerchantReference,
+                    return res.status(200).json({
+                        orderNotificationType,
+                        orderTrackingId,
+                        orderMerchantReference,
                         status: 200
                     });
 
@@ -1042,11 +1110,11 @@ export class PaymentController {
                     await queryRunner.release();
                 }
             } else {
-                res.status(200).json({ message: "Ignored notification type" });
+                return res.status(200).json({ message: "Ignored notification type" });
             }
         } catch (error) {
-            console.error(error);
-            res.status(500).json({ message: "Error processing Pesapal webhook" });
+            console.error("Error processing Pesapal webhook:", error);
+            return res.status(500).json({ message: "Error processing Pesapal webhook" });
         }
     }
 }

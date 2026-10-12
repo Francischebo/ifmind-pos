@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { AuthenticatedRequest } from "../middleware/auth";
 import { AppDataSource } from "../data-source";
 import { Sale, SaleStatus } from "../entity/Sale";
 import { ReturnRequest, ReturnStatus, RefundMethod, MpesaRefundStatus } from "../entity/ReturnRequest";
@@ -251,7 +252,7 @@ export class ReturnController {
         }
     }
 
-    static async requestReturn(req: any, res: Response) {
+    static async requestReturn(req: AuthenticatedRequest, res: Response) {
         const queryRunner = AppDataSource.createQueryRunner();
         await queryRunner.connect();
         await queryRunner.startTransaction();
@@ -283,7 +284,7 @@ export class ReturnController {
                 return res.status(403).json({ message: "Return window expired. Strictly limited to 3 working days." });
             }
 
-            const cashier = await queryRunner.manager.findOneBy(User, { id: req.user.id });
+            const cashier = await queryRunner.manager.findOneBy(User, { id: req.user!.id });
             if (!cashier) throw new Error("Cashier not found");
 
             const returnReq = new ReturnRequest();
@@ -333,7 +334,7 @@ export class ReturnController {
         }
     }
 
-    static async approveReturn(req: any, res: Response) {
+    static async approveReturn(req: AuthenticatedRequest, res: Response) {
         const requestId = req.params.id;
         const { items_conditions, refund_method } = sanitizeApproveReturnPayload(req.body);
 
@@ -370,7 +371,7 @@ export class ReturnController {
                 throw new Error("Invalid refund method");
             }
 
-            const admin = await queryRunner.manager.findOneBy(User, { id: req.user.id });
+            const admin = await queryRunner.manager.findOneBy(User, { id: req.user!.id });
             if (!admin) throw new Error("Approval user not found");
 
             const sale = returnReq.sale;
@@ -414,7 +415,7 @@ export class ReturnController {
                 const saleItem = retItem.sale_item;
                 const product = saleItem.product;
 
-                const conditionPayload = items_conditions?.find((c: any) => c.return_item_id === retItem.id);
+                const conditionPayload = items_conditions?.find((condition) => condition.return_item_id === retItem.id);
                 const condition = conditionPayload?.condition || ReturnItemCondition.SELLABLE;
                 if (!Object.values(ReturnItemCondition).includes(condition)) {
                     throw new Error("Invalid returned item condition");
@@ -660,7 +661,7 @@ export class ReturnController {
         }
     }
 
-    static async confirmMpesaRefundPayout(req: any, res: Response) {
+    static async confirmMpesaRefundPayout(req: AuthenticatedRequest, res: Response) {
         let receiptNumber: string;
         try {
             receiptNumber = sanitizeMpesaRefundReceipt(req.body);
@@ -708,7 +709,7 @@ export class ReturnController {
                 return res.status(409).json({ message: "M-Pesa refund amount is missing; reconcile this return before settlement" });
             }
 
-            const confirmingUser = await queryRunner.manager.findOneBy(User, { id: req.user.id });
+            const confirmingUser = await queryRunner.manager.findOneBy(User, { id: req.user!.id });
             if (!confirmingUser) {
                 await queryRunner.rollbackTransaction();
                 return res.status(401).json({ message: "Confirming user was not found" });
@@ -751,7 +752,7 @@ export class ReturnController {
         }
     }
 
-    static async rejectReturn(req: any, res: Response) {
+    static async rejectReturn(req: AuthenticatedRequest, res: Response) {
         const queryRunner = AppDataSource.createQueryRunner();
         try {
             const requestId = req.params.id;
@@ -773,7 +774,7 @@ export class ReturnController {
                 return res.status(409).json({ message: "Request already processed" });
             }
 
-            const admin = await queryRunner.manager.findOneBy(User, { id: req.user.id });
+            const admin = await queryRunner.manager.findOneBy(User, { id: req.user!.id });
             if (!admin) {
                 await queryRunner.rollbackTransaction();
                 return res.status(401).json({ message: "Rejecting user was not found" });
@@ -798,11 +799,11 @@ export class ReturnController {
         }
     }
 
-    static async getAllRequests(req: any, res: Response) {
+    static async getAllRequests(req: AuthenticatedRequest, res: Response) {
         try {
             const isCashier = req.user?.role === AppRole.CASHIER;
             const requests = await returnRepository.find({
-                where: isCashier && req.user?.id ? { requested_by: { id: req.user.id } } : {},
+                where: isCashier && req.user?.id ? { requested_by: { id: req.user!.id } } : {},
                 relations: ["sale", "requested_by", "approved_by", "items", "items.sale_item", "items.sale_item.product"],
                 order: { created_at: "DESC" }
             });
