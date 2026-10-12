@@ -391,9 +391,13 @@ export class SalesController {
                         .sort();
                     const amountInCents = (value: unknown) =>
                         Math.round(Number(value || 0) * 100);
+                    const requestedPaymentMethod =
+                        (amountInCents(cash_amount) > 0 || amountInCents(mpesa_amount) > 0 || amountInCents(store_credit_amount) > 0)
+                            ? deriveSalePaymentMethod(cash_amount || 0, mpesa_amount || 0, store_credit_amount || 0)
+                            : (payment_method || existingSale.payment_method);
                     const sameSaleRequest =
                         JSON.stringify(requestedItems) === JSON.stringify(existingItems) &&
-                        existingSale.payment_method === (payment_method || existingSale.payment_method) &&
+                        existingSale.payment_method === requestedPaymentMethod &&
                         amountInCents(existingSale.cash_amount) === amountInCents(cash_amount) &&
                         amountInCents(existingSale.mpesa_amount) === amountInCents(mpesa_amount) &&
                         amountInCents(existingSale.store_credit_amount) === amountInCents(store_credit_amount) &&
