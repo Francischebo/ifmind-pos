@@ -4,7 +4,7 @@ const { Client } = require("pg");
 const { spawnSync } = require("child_process");
 const { randomBytes, randomUUID } = require("crypto");
 const assert = require("node:assert/strict");
-const { existsSync, readFileSync } = require("fs");
+const { existsSync, readFileSync, readdirSync } = require("fs");
 const path = require("path");
 
 const rootEnvironmentPath = path.resolve(process.cwd(), "../.env");
@@ -196,7 +196,11 @@ const run = async () => {
                             WHERE table_schema = 'public' AND table_name = 'stock_movements'
                         ) AS has_stock_movement_ledger
                 `);
-                assert.equal(baseline.rows[0].migration_count, 19);
+                const migrationsDir = path.resolve(__dirname, "../src/migration");
+                const expectedMigrationCount = readdirSync(migrationsDir).filter(
+                    (file) => (file.endsWith(".ts") || file.endsWith(".js")) && !file.endsWith(".d.ts"),
+                ).length;
+                assert.equal(baseline.rows[0].migration_count, expectedMigrationCount);
                 assert.equal(baseline.rows[0].has_sales, true);
                 assert.equal(baseline.rows[0].has_stock_movement_ledger, true);
             } finally {
