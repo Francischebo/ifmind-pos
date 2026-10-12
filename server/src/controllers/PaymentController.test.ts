@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHmac } from "node:crypto";
+import type { Request, Response } from "express";
 import * as jwt from "jsonwebtoken";
 import { strToU8, zipSync } from "fflate";
+import { TaxClass } from "../entity/TaxClass";
+import { Sale } from "../entity/Sale";
 import { verifyPesapalSignature } from "../lib/pesapal";
 import { sanitizeCategoryName } from "./CategoryController";
 import {
@@ -35,7 +39,7 @@ import {
   verifyMpesaC2bCallbackToken,
 } from "./PaymentController";
 import { escapeHtml, getOtpEmailConfigurationIssues, shouldUseDevOtpFallback } from "../services/EmailService";
-import { authenticateJWT } from "../middleware/auth";
+import { authenticateJWT, type AuthenticatedRequest } from "../middleware/auth";
 import { EtimsMockService, ETIMS_MOCK_DISCLAIMER } from "../services/EtimsMockService";
 import { PesapalMockService } from "../services/PesapalMockService";
 import { resolveAllowedCorsOrigins } from "../index";
@@ -100,7 +104,7 @@ test("OTP email configuration requires both the provider key and verified sender
 });
 
 test("local frontend origins should include the active dev ports used by Vite", () => {
-  const allowedOrigins = (process.env.CORS_ORIGINS || "").split(",").map((origin) => origin.trim()).filter(Boolean);
+  const allowedOrigins = resolveAllowedCorsOrigins("development", "", "");
 
   assert.ok(allowedOrigins.includes("http://localhost:4173"), "localhost:4173 should be allowed");
   assert.ok(allowedOrigins.includes("http://127.0.0.1:4173"), "127.0.0.1:4173 should be allowed");
@@ -155,7 +159,7 @@ test("verifyPesapalSignature accepts a valid HMAC signature over canonical paylo
   assert.equal(verifyPesapalSignature(payload, signature), true);
 
   const rawBody = Buffer.from(JSON.stringify(payload));
-  const rawHmac = require("crypto").createHmac("sha256", "test-secret").update(rawBody).digest("hex");
+  const rawHmac = createHmac("sha256", "test-secret").update(rawBody).digest("hex");
   assert.equal(verifyPesapalSignature(payload, rawHmac, rawBody), true);
 });
 
@@ -358,11 +362,11 @@ test("product import selects the configured main warehouse for opening stock whe
 });
 
 test("matchProductImportTaxClass matches standard tax types, percentages, KRA codes, and aliases", () => {
-  const standard16 = { id: "1", name: "Standard VAT 16%", rate: 16.0, is_default: true } as any;
-  const zeroRated0 = { id: "2", name: "Zero Rated 0%", rate: 0.0, is_default: false } as any;
-  const exempt0 = { id: "3", name: "Exempt 0%", rate: 0.0, is_default: false } as any;
-  const special8 = { id: "4", name: "Special Rate 8%", rate: 8.0, is_default: false } as any;
-  const tourism2 = { id: "5", name: "Tourism Levy 2%", rate: 2.0, is_default: false } as any;
+  const standard16 = Object.assign(new TaxClass(), { id: "1", name: "Standard VAT 16%", rate: 16.0, is_default: true });
+  const zeroRated0 = Object.assign(new TaxClass(), { id: "2", name: "Zero Rated 0%", rate: 0.0, is_default: false });
+  const exempt0 = Object.assign(new TaxClass(), { id: "3", name: "Exempt 0%", rate: 0.0, is_default: false });
+  const special8 = Object.assign(new TaxClass(), { id: "4", name: "Special Rate 8%", rate: 8.0, is_default: false });
+  const tourism2 = Object.assign(new TaxClass(), { id: "5", name: "Tourism Levy 2%", rate: 2.0, is_default: false });
 
   const taxClasses = [standard16, zeroRated0, exempt0, special8, tourism2];
 
@@ -990,25 +994,25 @@ test("sanitizeSalePayload and sanitizeVoidSalePayload enforce trusted sale field
     reason: "Customer cancelled",
   });
 
-  test("cash change is returned from tender and not counted as shift cash", () => {
-    assert.equal(calculateCashChange(150, 0, 0, 100), 50);
-    assert.equal(calculateCashChange(80, 30, 0, 100), 10);
-    assert.equal(calculateCashChange(80, 20, 0, 100), 0);
-    assert.equal(calculateCashChange(40, 0, 0, 40), 0);
-  });
-
-  test("sale payment method reflects all actual tender types", () => {
-    assert.equal(deriveSalePaymentMethod(20, 0, 0), "cash");
-    assert.equal(deriveSalePaymentMethod(0, 20, 0), "mpesa");
-    assert.equal(deriveSalePaymentMethod(0, 0, 20), "store_credit");
-    assert.equal(deriveSalePaymentMethod(20, 20, 0), "hybrid");
-    assert.equal(deriveSalePaymentMethod(20, 0, 20), "hybrid");
-    assert.equal(deriveSalePaymentMethod(0, 20, 20), "hybrid");
-    assert.throws(() => deriveSalePaymentMethod(0, 0, 0), /at least one payment tender/i);
-  });
-
   assert.throws(() => sanitizeSalePayload({ items: [{ product_id: "prod-1", quantity: 0 }], payment_method: "bitcoin" }), /payment_method|quantity/i);
   assert.throws(() => sanitizeVoidSalePayload({ reason: ["bad"] }), /reason/i);
+});
+
+test("cash change is returned from tender and not counted as shift cash", () => {
+  assert.equal(calculateCashChange(150, 0, 0, 100), 50);
+  assert.equal(calculateCashChange(80, 30, 0, 100), 10);
+  assert.equal(calculateCashChange(80, 20, 0, 100), 0);
+  assert.equal(calculateCashChange(40, 0, 0, 40), 0);
+});
+
+test("sale payment method reflects all actual tender types", () => {
+  assert.equal(deriveSalePaymentMethod(20, 0, 0), "cash");
+  assert.equal(deriveSalePaymentMethod(0, 20, 0), "mpesa");
+  assert.equal(deriveSalePaymentMethod(0, 0, 20), "store_credit");
+  assert.equal(deriveSalePaymentMethod(20, 20, 0), "hybrid");
+  assert.equal(deriveSalePaymentMethod(20, 0, 20), "hybrid");
+  assert.equal(deriveSalePaymentMethod(0, 20, 20), "hybrid");
+  assert.throws(() => deriveSalePaymentMethod(0, 0, 0), /at least one payment tender/i);
 });
 
 test("sanitizeUserRolePayload, sanitizeTransferStatusPayload and sanitizeStockTakePayload validate trusted admin and inventory state updates", () => {
@@ -1284,12 +1288,13 @@ test("authenticateJWT middleware explicitly returns 401 when token has is_otp_ph
 
   let statusSent: number | undefined;
   let jsonSent: unknown;
-  const mockReq: any = {
+  const mockReq = {
     headers: {
       authorization: `Bearer ${otpTokenWithRole}`,
     },
-  };
-  const mockRes: any = {
+    params: {},
+  } as unknown as AuthenticatedRequest;
+  const mockRes = {
     status(code: number) {
       statusSent = code;
       return this;
@@ -1302,7 +1307,7 @@ test("authenticateJWT middleware explicitly returns 401 when token has is_otp_ph
       statusSent = code;
       return this;
     },
-  };
+  } as unknown as Response;
   let nextCalled = false;
   const nextFn = () => {
     nextCalled = true;
@@ -1316,7 +1321,7 @@ test("authenticateJWT middleware explicitly returns 401 when token has is_otp_ph
 });
 
 test("EtimsMockService signs invoices with prominent test disclaimers and test prefixes", async () => {
-  const dummySale: any = { id: "test-sale-123" };
+  const dummySale = Object.assign(new Sale(), { id: "test-sale-123" });
   const result = await EtimsMockService.signInvoice(dummySale);
 
   assert.equal(result.is_mock, true);

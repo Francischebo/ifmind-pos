@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { AdminSetupService } from "./services/AdminSetupService";
+import { sanitizeChangePasswordPayload } from "./controllers/AuthController";
 
 test("production refuses TypeORM schema synchronization", () => {
     const result = spawnSync(
@@ -124,8 +126,6 @@ test("production rejects known default or weak JWT_SECRET", () => {
 });
 
 test("AdminSetupService validates admin password strength and blocks default in production", () => {
-    const { AdminSetupService } = require("./services/AdminSetupService");
-
     // Rejects known default in production
     assert.throws(
         () => AdminSetupService.validateAdminPassword("Fr@nk123!!__", true),
@@ -151,7 +151,6 @@ test("AdminSetupService validates admin password strength and blocks default in 
 });
 
 test("sanitizeChangePasswordPayload enforces security rules", () => {
-    const { sanitizeChangePasswordPayload } = require("./controllers/AuthController");
 
     // Requires object
     assert.throws(() => sanitizeChangePasswordPayload(null), /must be an object/i);
