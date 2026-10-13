@@ -6,6 +6,14 @@
   "outputDirectory": "dist",
   "rewrites": [
     {
+      "source": "/api/:match*",
+      "destination": "https://your-pos-api.onrender.com/api/:match*"
+    },
+    {
+      "source": "/socket.io/:match*",
+      "destination": "https://your-pos-api.onrender.com/socket.io/:match*"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

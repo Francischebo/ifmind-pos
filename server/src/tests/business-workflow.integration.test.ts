@@ -3643,12 +3643,78 @@ test("user can register, verify login OTP, and access their profile", async () =
         assert.equal(verifiedSession.user.email, registeredAuthEmail);
         assert.equal(verifiedSession.user.role, "cashier");
 
+        const setCookieHeader = verifyResponse.headers.get("set-cookie") || "";
+        assert.match(setCookieHeader, /jwt_token=/i, "OTP verification must set the jwt_token cookie");
+        assert.match(setCookieHeader, /HttpOnly/i, "Session cookie must have HttpOnly flag");
+        assert.match(setCookieHeader, /Path=\//i, "Session cookie must have Path=/");
+
+        // Extract cookie string for cookie-only authentication test
+        const cookieMatch = /(?:^|;\s*)(jwt_token=[^;]+)/.exec(setCookieHeader);
+        assert.ok(cookieMatch, "Must be able to extract cookie string");
+        const cookieString = cookieMatch[1];
+
+        // 1. Authenticate with Cookie alone (no Authorization header) - matches real frontend behavior
+        const cookieOnlyProfileResponse = await fetch(`http://127.0.0.1:${port}/api/auth/me`, {
+            headers: { Cookie: cookieString },
+        });
+        assert.equal(cookieOnlyProfileResponse.status, 200, "Cookie authentication without Authorization header must succeed");
+        const cookieOnlyProfile = (await cookieOnlyProfileResponse.json()) as IntegrationApiObject;
+        assert.equal(cookieOnlyProfile.profile.full_name, "Integration Auth User");
+
+        // 2. Verified access token Authorization header fallback also works
         const profileResponse = await fetch(`http://127.0.0.1:${port}/api/auth/me`, {
             headers: { Authorization: `Bearer ${verifiedSession.token}` },
         });
         assert.equal(profileResponse.status, 200, "Verified access token should authorize profile access");
         const profileBody = (await profileResponse.json()) as IntegrationApiObject;
         assert.equal(profileBody.profile.full_name, "Integration Auth User");
+
+        // 3. Logout clears cookie
+        const logoutResponse = await fetch(`http://127.0.0.1:${port}/api/auth/logout`, {
+            method: "POST",
+            headers: { Cookie: cookieString },
+        });
+        assert.equal(logoutResponse.status, 200);
+        const logoutSetCookie = logoutResponse.headers.get("set-cookie") || "";
+        assert.match(logoutSetCookie, /jwt_token=;/i, "Logout must clear the jwt_token cookie");
+
+        // 4. Test configured COOKIE_DOMAIN and COOKIE_SAMESITE in real HTTP verification flow
+        const originalCookieDomain = process.env.COOKIE_DOMAIN;
+        const originalCookieSameSite = process.env.COOKIE_SAMESITE;
+        try {
+            process.env.COOKIE_DOMAIN = ".pos.example.co.ke";
+            process.env.COOKIE_SAMESITE = "none";
+
+            const crossSiteLoginResponse = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ email: registeredAuthEmail, password: "IntegrationPass123!" }),
+            });
+            assert.equal(crossSiteLoginResponse.status, 200);
+            const crossSiteLoginBody = (await crossSiteLoginResponse.json()) as IntegrationApiObject;
+
+            const crossSiteVerifyResponse = await fetch(`http://127.0.0.1:${port}/api/auth/verify-otp`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ otp_token: crossSiteLoginBody.otp_token, code: capturedOtp }),
+            });
+            assert.equal(crossSiteVerifyResponse.status, 200);
+            const crossSiteSetCookie = crossSiteVerifyResponse.headers.get("set-cookie") || "";
+            assert.match(crossSiteSetCookie, /Domain=\.pos\.example\.co\.ke/i, "Configured COOKIE_DOMAIN must be present");
+            assert.match(crossSiteSetCookie, /SameSite=None/i, "Configured COOKIE_SAMESITE=none must be present");
+            assert.match(crossSiteSetCookie, /Secure/i, "SameSite=None must enforce Secure flag");
+        } finally {
+            if (originalCookieDomain !== undefined) {
+                process.env.COOKIE_DOMAIN = originalCookieDomain;
+            } else {
+                delete process.env.COOKIE_DOMAIN;
+            }
+            if (originalCookieSameSite !== undefined) {
+                process.env.COOKIE_SAMESITE = originalCookieSameSite;
+            } else {
+                delete process.env.COOKIE_SAMESITE;
+            }
+        }
     } finally {
         EmailService.sendOtpEmail = originalSendOtpEmail;
         await new Promise<void>((resolve, reject) => {

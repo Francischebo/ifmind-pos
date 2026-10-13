@@ -1,5 +1,10 @@
 import { Request, Response } from "express";
-import { AuthenticatedRequest, getJwtSecret } from "../middleware/auth";
+import {
+    AuthenticatedRequest,
+    getJwtSecret,
+    getAuthCookieOptions,
+    getClearAuthCookieOptions,
+} from "../middleware/auth";
 import { AppDataSource } from "../data-source";
 import { User, AppRole } from "../entity/User";
 import { Profile } from "../entity/Profile";
@@ -229,13 +234,7 @@ export class AuthController {
             );
 
             // Clear any preexisting session cookie so it cannot be used during OTP phase
-            const isProd = process.env.NODE_ENV === "production";
-            res.clearCookie("jwt_token", {
-                httpOnly: true,
-                secure: isProd,
-                sameSite: isProd ? "strict" : "lax",
-                path: "/",
-            });
+            res.clearCookie("jwt_token", getClearAuthCookieOptions());
 
             const response: Record<string, unknown> = {
                 message: "OTP sent to email",
@@ -319,14 +318,7 @@ export class AuthController {
                 { expiresIn: "1d" }
             );
 
-            const isProd = process.env.NODE_ENV === "production";
-            res.cookie("jwt_token", token, {
-                httpOnly: true,
-                secure: isProd,
-                sameSite: isProd ? "strict" : "lax",
-                maxAge: 24 * 60 * 60 * 1000, // 24 hours
-                path: "/",
-            });
+            res.cookie("jwt_token", token, getAuthCookieOptions(24 * 60 * 60 * 1000));
 
             res.json({ token, user: { id: user.id, email: user.email, role: user.role } });
         } catch (err) {
@@ -336,13 +328,7 @@ export class AuthController {
     }
 
     static async logout(_req: Request, res: Response) {
-        const isProd = process.env.NODE_ENV === "production";
-        res.clearCookie("jwt_token", {
-            httpOnly: true,
-            secure: isProd,
-            sameSite: isProd ? "strict" : "lax",
-            path: "/",
-        });
+        res.clearCookie("jwt_token", getClearAuthCookieOptions());
         return res.json({ message: "Logged out successfully" });
     }
 

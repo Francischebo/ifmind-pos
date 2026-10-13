@@ -35,6 +35,58 @@
 
 ## 🚀 Deployment Steps
 
+### Supported Deployment Shapes for Cookie Authentication
+
+cfi-POS stores session JWT tokens in secure, `httpOnly` cookies (`jwt_token`) to safeguard POS credentials against XSS. Modern browsers restrict third-party and cross-site cookies, so deployments must follow one of two supported architectural shapes:
+
+#### Shape A: Same-Origin / Shared Parent Domain (Recommended)
+Host the frontend and backend under the same registered parent domain:
+- **Frontend:** `https://app.example.co.ke` (Vercel or CDN)
+- **Backend API:** `https://api.example.co.ke` (Render, Fly.io, or VPS)
+- **Environment Configuration:**
+  - **Backend API:**
+    - `COOKIE_DOMAIN=.example.co.ke` (leading dot scopes authentication to all subdomains)
+    - `COOKIE_SAMESITE=lax` (or `strict` if using a single domain reverse proxy)
+    - `FRONTEND_URL=https://app.example.co.ke`
+    - `CORS_ORIGINS=https://app.example.co.ke`
+  - **Frontend (Vercel):**
+    - `VITE_API_URL=https://api.example.co.ke/api`
+  - **WebSockets:** Full native bidirectional WebSocket connections to `https://api.example.co.ke`.
+
+#### Shape B: Vercel Proxying `/api` (Zero-Config Subdomains)
+Frontend on Vercel (`https://pos.vercel.app` or custom domain) with backend on Render (`https://pos-api.onrender.com`):
+- All browser requests target the Vercel origin. Vercel rewrites `/api/*` and `/socket.io/*` to Render so the browser treats API requests as same-origin.
+- **Environment Configuration:**
+  - **Vercel (`vercel.json`):**
+    ```json
+    {
+      "rewrites": [
+        { "source": "/api/:match*", "destination": "https://your-pos-api.onrender.com/api/:match*" },
+        { "source": "/socket.io/:match*", "destination": "https://your-pos-api.onrender.com/socket.io/:match*" },
+        { "source": "/(.*)", "destination": "/index.html" }
+      ]
+    }
+    ```
+  - **Frontend (Vercel):**
+    - `VITE_API_URL=/api`
+  - **Backend API (Render):**
+    - `FRONTEND_URL=https://your-pos-app.vercel.app`
+    - `CORS_ORIGINS=https://your-pos-app.vercel.app`
+    - `COOKIE_SAMESITE=strict` (or `lax`)
+  - **WebSockets Fallback:** Vercel serverless rewrites do not support WebSocket upgrades. The Socket.IO client automatically and gracefully falls back to HTTP long-polling. For native WebSocket performance at busy tills, use Shape A.
+
+### ⚠️ Troubleshooting: "Logged out immediately"
+If users complete login and OTP verification but are immediately redirected back to the login screen:
+1. **Third-Party Cookie Blocking (Different Sites):**
+   - If the frontend is on `*.vercel.app` and the API is on `*.onrender.com`, browsers block cross-site cookies under default privacy settings.
+   - **Resolution:** Adopt **Shape A** (custom parent domain) or **Shape B** (`vercel.json` proxy rewrites with `VITE_API_URL=/api`).
+2. **Missing `COOKIE_DOMAIN` on Subdomains:**
+   - If using `app.example.co.ke` and `api.example.co.ke` without `COOKIE_DOMAIN`, the cookie is restricted to `api.example.co.ke` and not transmitted by `app.example.co.ke`.
+   - **Resolution:** Configure `COOKIE_DOMAIN=.example.co.ke` on the backend API.
+3. **`SameSite=None` without HTTPS:**
+   - Browsers reject `SameSite=None` if `Secure` is false.
+   - **Resolution:** Ensure the backend is accessed via HTTPS (the backend enforces `secure: true` when `COOKIE_SAMESITE=none`).
+
 ### Vercel frontend with GitHub auto-deploy
 - [ ] Import the GitHub repository into Vercel and set the project root to the folder containing `vercel.json` and the root `package.json`.
 - [ ] Set `VITE_API_URL` (HTTPS API URL ending in `/api`) for Production and any Preview environments.

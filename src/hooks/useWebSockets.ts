@@ -18,7 +18,7 @@ export const useWebSockets = (callbacks: {
 
         socketRef.current = io(baseUrl, {
             withCredentials: true,
-            transports: ["websocket"],
+            transports: ["websocket", "polling"],
         });
 
         socketRef.current.on("connect", () => {

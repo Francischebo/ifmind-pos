@@ -16,6 +16,14 @@ if (!apiUrl) {
   process.exit(0);
 }
 
+// Relative URL support (Shape B: Vercel proxy rewrites / same-origin reverse proxy)
+if (apiUrl.startsWith("/")) {
+  if (!apiUrl.replace(/\/+$/, "").endsWith("/api")) {
+    console.warn("⚠️ Warning: Relative VITE_API_URL should typically end with '/api' (e.g. '/api').");
+  }
+  process.exit(0);
+}
+
 try {
   const url = new URL(apiUrl);
   if (isProductionVercel && url.protocol !== "https:") {
@@ -25,7 +33,7 @@ try {
     console.warn("⚠️ Warning: VITE_API_URL should typically include the '/api' route prefix (e.g. https://your-api.onrender.com/api).");
   }
 } catch {
-  console.warn("⚠️ Warning: VITE_API_URL does not appear to be a valid absolute URL.");
+  console.warn("⚠️ Warning: VITE_API_URL does not appear to be a valid absolute or relative URL.");
 }
 
 process.exit(0);

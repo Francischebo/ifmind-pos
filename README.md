@@ -192,17 +192,58 @@ The API is stateless for ordinary HTTP requests and can use multiple instances b
 
 The midnight auto-reorder job uses a PostgreSQL advisory lock so multiple API replicas do not all generate the same scheduled requisitions. Graceful SIGTERM/SIGINT handling stops the scheduler, closes Socket.IO/HTTP and the notification connection, and drains TypeORM connections. These measures improve safe scale-out and deploy behavior but do not establish a production concurrency limit; run a representative load test against the chosen hosting plan and database before increasing users or replicas.
 
-#### Connect Vercel to the API
+#### Connect Vercel to the API (Two Supported Deployment Shapes)
+
+cfi-POS protects credentials against XSS by storing session tokens in secure `httpOnly` cookies (`jwt_token`). Since modern browsers restrict third-party cross-site cookies, select one of the two supported shapes:
+
+##### Shape A: Same-Origin / Shared Parent Domain (Recommended)
+Host the frontend and backend under a shared parent domain:
+- **Frontend:** `https://app.example.co.ke` (Vercel)
+- **Backend API:** `https://api.example.co.ke` (Render / VPS)
+- **Settings:**
+  - Vercel Environment Variable: `VITE_API_URL=https://api.example.co.ke/api`
+  - Render Environment Variables:
+    - `COOKIE_DOMAIN=.example.co.ke` (leading dot scopes cookie to all subdomains)
+    - `COOKIE_SAMESITE=lax`
+    - `FRONTEND_URL=https://app.example.co.ke`
+    - `CORS_ORIGINS=https://app.example.co.ke`
+  - WebSockets: Direct bidirectional connection to `https://api.example.co.ke`.
+
+##### Shape B: Vercel Proxying `/api` (Zero-Config Subdomains)
+Frontend on Vercel (`https://pos.vercel.app` or custom domain) with backend on Render (`https://pos-api.onrender.com`):
+- All requests target Vercel; Vercel reverse-proxies `/api/*` and `/socket.io/*` to Render so the browser treats the API as same-origin.
+- **Settings:**
+  - Vercel Environment Variable: `VITE_API_URL=/api`
+  - Vercel `vercel.json` rewrites:
+    ```json
+    {
+      "rewrites": [
+        { "source": "/api/:match*", "destination": "https://your-pos-api.onrender.com/api/:match*" },
+        { "source": "/socket.io/:match*", "destination": "https://your-pos-api.onrender.com/socket.io/:match*" },
+        { "source": "/(.*)", "destination": "/index.html" }
+      ]
+    }
+    ```
+  - Render Environment Variables:
+    - `FRONTEND_URL=https://your-pos-app.vercel.app`
+    - `CORS_ORIGINS=https://your-pos-app.vercel.app`
+    - `COOKIE_SAMESITE=strict` (or `lax`)
+  - WebSockets: Vercel serverless rewrites do not support WebSocket upgrades; Socket.IO client automatically falls back to HTTP long-polling.
+
+##### ⚠️ Troubleshooting: "Logged out immediately"
+If users log in, verify OTP, but are immediately redirected back to the login screen:
+1. **Third-Party Cookie Blocking (Different Sites):** If the frontend is on `*.vercel.app` and API is on `*.onrender.com`, modern browsers block cross-site cookies. Switch to **Shape A** (custom parent domain) or **Shape B** (`vercel.json` proxy rewrites with `VITE_API_URL=/api`).
+2. **Missing `COOKIE_DOMAIN` on Subdomains:** If using `app.example.co.ke` and `api.example.co.ke` without `COOKIE_DOMAIN`, the cookie is restricted to `api.example.co.ke`. Set `COOKIE_DOMAIN=.example.co.ke` on the backend API.
+3. **`SameSite=None` without HTTPS:** Browsers reject `SameSite=None` without `Secure=true`. Serve the API over HTTPS (the backend enforces `secure: true` when `COOKIE_SAMESITE=none`).
 
 1. Push this repository to GitHub and import it into Vercel using **Add New → Project**. Select the repository and set the **Root Directory** to `Retail-store-pos-system-main` if this folder is nested inside the GitHub repository; otherwise use the repository root.
 2. Keep the project framework as **Vite** and use the build settings in `vercel.json` (`npm ci`, `npm run build:vercel`, output `dist`). Do not configure the API's `server` directory as the Vercel project root.
 3. Add these values under **Project Settings → Environment Variables** for Production and Preview as appropriate:
-   - `VITE_API_URL`: the public HTTPS API base URL, including `/api` (for example, `https://pos-api.example.com/api`).
-   Set `VITE_API_URL` to the Render service URL from the preceding section plus `/api` (for example, `https://cfi-pos-api.onrender.com/api`).
+   - `VITE_API_URL`: the public HTTPS API base URL ending in `/api` (for Shape A, e.g. `https://pos-api.example.com/api`), or `/api` (for Shape B proxying).
 4. Set `FRONTEND_URL` and `CORS_ORIGINS` on Render to the exact Vercel production origin and any custom frontend domains, comma-separated. Add only known stable Vercel preview origins that need API access; do not allow arbitrary `*.vercel.app` origins.
-5. Deploy from Vercel once. After that, Vercel automatically builds and deploys each push to the connected GitHub repository; pushes to the configured production branch create Production Deployments, and other branches create Preview Deployments. Review Vercel's deployment status/checks on GitHub.
+5. Deploy from Vercel once. After that, Vercel automatically builds and deploys each push to the connected GitHub repository. Review Vercel's deployment status/checks on GitHub.
 
-The Vercel build deliberately fails with an actionable error if `VITE_API_URL` is missing, is not HTTPS, or does not end in `/api`. Vite embeds this public API URL at build time, so changing it requires a new deployment. Supabase variables are not required. Database credentials, `JWT_SECRET`, `ENCRYPTION_KEY`, and payment-provider secrets belong only on the API host and must never be added as `VITE_` variables. Deploy backend migrations on the API host using the existing TypeORM migration instructions before releasing backend updates.
+The Vercel build deliberately fails with an actionable error if `VITE_API_URL` is missing, is not HTTPS (unless using relative `/api`), or does not end in `/api`. Vite embeds this public API URL at build time, so changing it requires a new deployment. Supabase variables are not required. Database credentials, `JWT_SECRET`, `ENCRYPTION_KEY`, and payment-provider secrets belong only on the API host and must never be added as `VITE_` variables. Deploy backend migrations on the API host using the existing TypeORM migration instructions before releasing backend updates.
 
 #### Optional Supabase extension assets
 

@@ -47,7 +47,7 @@ export class SocketService {
                 credentials: true,
                 methods: ["GET", "POST"]
             },
-            transports: ["websocket"],
+            transports: ["websocket", "polling"],
         });
 
         await this.connectNotificationClient();

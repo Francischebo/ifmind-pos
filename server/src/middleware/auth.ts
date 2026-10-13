@@ -33,6 +33,65 @@ export const getJwtSecret = () => {
     return jwtSecret;
 };
 
+export type CookieSameSite = "strict" | "lax" | "none";
+
+export interface AuthCookieOptions {
+    httpOnly: boolean;
+    secure: boolean;
+    sameSite: CookieSameSite;
+    domain?: string;
+    path: string;
+    maxAge?: number;
+}
+
+export const resolveCookieSameSite = (): CookieSameSite => {
+    const raw = (process.env.COOKIE_SAMESITE || "").trim().toLowerCase();
+    if (!raw) {
+        return process.env.NODE_ENV === "production" ? "strict" : "lax";
+    }
+    if (raw === "strict" || raw === "lax" || raw === "none") {
+        return raw;
+    }
+    throw new Error(`Invalid COOKIE_SAMESITE '${raw}'. Supported values are 'strict', 'lax', or 'none'.`);
+};
+
+export const resolveCookieDomain = (): string | undefined => {
+    const raw = (process.env.COOKIE_DOMAIN || "").trim();
+    if (!raw) return undefined;
+    // Strip leading protocol and port if mistakenly provided
+    const sanitized = raw.replace(/^https?:\/\//i, "").split(":")[0].replace(/^\/+/, "");
+    return sanitized || undefined;
+};
+
+export const getAuthCookieOptions = (maxAgeMs?: number): AuthCookieOptions => {
+    const sameSite = resolveCookieSameSite();
+    const domain = resolveCookieDomain();
+    const isProd = process.env.NODE_ENV === "production";
+    // In compliance with RFC 6265bis, SameSite=None requires the Secure attribute
+    const secure = sameSite === "none" ? true : isProd;
+
+    const options: AuthCookieOptions = {
+        httpOnly: true,
+        secure,
+        sameSite,
+        path: "/",
+    };
+
+    if (domain) {
+        options.domain = domain;
+    }
+
+    if (typeof maxAgeMs === "number") {
+        options.maxAge = maxAgeMs;
+    }
+
+    return options;
+};
+
+export const getClearAuthCookieOptions = (): AuthCookieOptions => {
+    return getAuthCookieOptions();
+};
+
 export const authenticateJWT = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     let token: string | undefined;
 
