@@ -1062,6 +1062,16 @@ export class PaymentController {
     }
 
     static async pesapalWebhook(req: Request, res: Response) {
+        const isProduction = process.env.NODE_ENV === "production";
+        const isExplicitlyDisabled = process.env.ENABLE_PESAPAL_PAYMENTS === "false";
+        const isExplicitlyEnabled = process.env.ENABLE_PESAPAL_PAYMENTS === "true";
+
+        if (isExplicitlyDisabled || (isProduction && !isExplicitlyEnabled)) {
+            return res.status(503).json({
+                message: "Pesapal card payments are disabled on this instance. Configure ENABLE_PESAPAL_PAYMENTS=true to enable.",
+            });
+        }
+
         try {
             const rawBody = (req as Request & { rawBody?: Buffer }).rawBody;
             const payload = (

@@ -10,7 +10,17 @@ export class PesapalMockService {
         redirect_url: string;
         is_mock: boolean;
     }> {
-        if (process.env.NODE_ENV === "production" && process.env.ALLOW_SIMULATED_PESAPAL !== "true") {
+        const isProduction = process.env.NODE_ENV === "production";
+        const isExplicitlyDisabled = process.env.ENABLE_PESAPAL_PAYMENTS === "false";
+        const isExplicitlyEnabled = process.env.ENABLE_PESAPAL_PAYMENTS === "true";
+
+        if (isExplicitlyDisabled || (isProduction && !isExplicitlyEnabled)) {
+            throw new Error(
+                "Pesapal card payments are disabled on this instance. Set ENABLE_PESAPAL_PAYMENTS=true to enable."
+            );
+        }
+
+        if (isProduction && process.env.ALLOW_SIMULATED_PESAPAL !== "true") {
             throw new Error(
                 "FATAL: Simulated Pesapal payment is disabled in production. Live Pesapal IPN and API credentials must be configured."
             );

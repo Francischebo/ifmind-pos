@@ -39,6 +39,15 @@ import { TaxService } from "./services/TaxService";
 import { AdminSetupService } from "./services/AdminSetupService";
 import { getOtpEmailConfigurationIssues } from "./services/EmailService";
 import { EtimsService } from "./services/etims/EtimsService";
+import {
+    requestIdMiddleware,
+    requestLoggingMiddleware,
+    ErrorTracker,
+    livenessHandler,
+    readinessHandler,
+    ObservabilityRequest,
+} from "./lib/observability";
+import { assertProductionConfigReady } from "./lib/configValidator";
 
 export const app = express();
 export const httpServer = createServer(app);
@@ -198,15 +207,9 @@ app.use(express.json({
     },
 }));
 
-// Request Logging Middleware
-app.use((req, res, next) => {
-    const start = Date.now();
-    res.on("finish", () => {
-        const duration = Date.now() - start;
-        console.log(`[HTTP] ${req.method} ${req.path} - ${res.statusCode} - ${duration}ms`);
-    });
-    next();
-});
+// Request ID & Logging Middleware
+app.use(requestIdMiddleware);
+app.use(requestLoggingMiddleware);
 
 // Rate Limiting to prevent brute-force
 interface RateLimitIdentity {
@@ -263,7 +266,11 @@ const apiLimiter = rateLimit({
         (req as RateLimitedRequest).rateLimitIdentity?.key || `ip:${ipKeyGenerator(req.ip || "127.0.0.1")}`,
     standardHeaders: true,
     legacyHeaders: false,
-    skip: (req) => req.path === "/health",
+    skip: (req) =>
+        req.path === "/health" ||
+        req.path === "/ready" ||
+        req.path === "/api/health" ||
+        req.path === "/api/ready",
     message: "Too many requests. Please try again later.",
 });
 app.use("/api/", attachRateLimitIdentity, apiLimiter);
@@ -348,22 +355,15 @@ const logPayloadSizeLimiter: express.RequestHandler = (req, res, next) => {
     next();
 };
 
-// Root and Favicon routes to prevent browser 404s
-const healthCheck = async (_req: express.Request, res: express.Response) => {
-    try {
-        await AppDataSource.query("SELECT 1");
-        res.json({ status: "ok" });
-    } catch (error) {
-        console.error("Health check failed: PostgreSQL is unavailable.", error);
-        res.status(503).json({ status: "unavailable" });
-    }
-};
-app.get("/health", healthCheck);
-app.get("/api/health", healthCheck);
-app.get("/", (req, res) => {
-    res.json({ status: "Molabs POS API is running smoothly", version: "1.0.0" });
+// Liveness and Readiness routes
+app.get("/health", livenessHandler);
+app.get("/api/health", livenessHandler);
+app.get("/ready", readinessHandler);
+app.get("/api/ready", readinessHandler);
+app.get("/", (_req, res) => {
+    res.json({ status: "cfi-POS Techiez Limited API is running smoothly", version: "1.0.0" });
 });
-app.get("/favicon.ico", (req, res) => res.status(204).end());
+app.get("/favicon.ico", (_req, res) => res.status(204).end());
 
 // Auth Routes
 app.post("/api/auth/register", loginLimiter, AuthController.register);
@@ -548,7 +548,11 @@ app.use((req, res, next) => {
 });
 
 // Global error handler
-app.use((err: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
+app.use((err: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    ErrorTracker.captureException(err, {
+        requestId: (req as ObservabilityRequest).id,
+        path: req.originalUrl || req.url || req.path,
+    });
     console.error(err instanceof Error ? err.stack : err);
     res.status(500).json({ error: "Internal Server Error" });
 });
@@ -556,14 +560,9 @@ app.use((err: unknown, req: express.Request, res: express.Response, next: expres
 export const startServer = async () => {
     try {
         if (process.env.NODE_ENV === "production") {
-            const emailConfigurationIssues = getOtpEmailConfigurationIssues();
-            if (emailConfigurationIssues.length > 0) {
-                throw new Error(
-                    `Production email delivery is required for OTP login: ${emailConfigurationIssues.join(", ")}.`,
-                );
-            }
-            EtimsService.resolveEtimsMode();
+            assertProductionConfigReady();
         }
+        ErrorTracker.init();
 
         await AppDataSource.initialize();
         console.log("Database connection established.");

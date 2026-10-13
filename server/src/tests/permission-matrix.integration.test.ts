@@ -17,7 +17,7 @@ if (!testDatabaseUrl) {
 
 process.env.NODE_ENV = "test";
 process.env.DATABASE_URL = testDatabaseUrl;
-process.env.TYPEORM_SYNCHRONIZE = "true";
+process.env.TYPEORM_SYNCHRONIZE = "false";
 
 const { app } = loadModule("../index") as typeof import("../index");
 const { AppDataSource } = loadModule("../data-source") as typeof import("../data-source");
@@ -40,6 +40,8 @@ const PERMISSION_MATRIX: RouteSpec[] = [
     // 1. Public routes
     { method: "GET", path: "/health", allowedRoles: "public" },
     { method: "GET", path: "/api/health", allowedRoles: "public" },
+    { method: "GET", path: "/ready", allowedRoles: "public" },
+    { method: "GET", path: "/api/ready", allowedRoles: "public" },
     { method: "GET", path: "/", allowedRoles: "public" },
     { method: "GET", path: "/favicon.ico", allowedRoles: "public" },
     { method: "POST", path: "/api/auth/register", allowedRoles: "public" },
