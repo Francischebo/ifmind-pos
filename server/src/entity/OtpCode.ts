@@ -22,6 +22,9 @@ export class OtpCode {
     @Column({ default: false })
     is_used: boolean;
 
+    @Column({ default: 0 })
+    attempts: number;
+
     @CreateDateColumn()
     created_at: Date;
 }

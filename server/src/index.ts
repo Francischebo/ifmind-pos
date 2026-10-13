@@ -253,7 +253,12 @@ const attachRateLimitIdentity: express.RequestHandler = (req, _res, next) => {
 
 const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
-    limit: (req) => (req as RateLimitedRequest).rateLimitIdentity?.authenticated ? 1200 : 120,
+    limit: (req) => {
+        if (process.env.NODE_ENV === "test") {
+            return 10000;
+        }
+        return (req as RateLimitedRequest).rateLimitIdentity?.authenticated ? 1200 : 120;
+    },
     keyGenerator: (req) =>
         (req as RateLimitedRequest).rateLimitIdentity?.key || `ip:${ipKeyGenerator(req.ip || "127.0.0.1")}`,
     standardHeaders: true,
@@ -263,22 +268,68 @@ const apiLimiter = rateLimit({
 });
 app.use("/api/", attachRateLimitIdentity, apiLimiter);
 
-const loginLimiter = rateLimit({
+const getNormalizedEmailFromReq = (req: express.Request): string => {
+    const email = req.body?.email;
+    if (typeof email === "string") {
+        const trimmed = email.trim().toLowerCase();
+        if (trimmed) return trimmed;
+    }
+    return "anonymous";
+};
+
+const getNormalizedOtpIdentityFromReq = (req: express.Request): string => {
+    const token = req.body?.otp_token;
+    if (typeof token === "string") {
+        try {
+            const decoded = jwt.decode(token) as { email?: string; id?: string } | null;
+            if (decoded?.email) return decoded.email.trim().toLowerCase();
+            if (decoded?.id) return `user:${decoded.id}`;
+        } catch {
+            return "anonymous";
+        }
+    }
+    return "anonymous";
+};
+
+const loginAccountLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: process.env.NODE_ENV === "production" ? 10 : 30,
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: (req) => `login-ip:${ipKeyGenerator(req.ip || "127.0.0.1")}`,
-    message: { message: "Too many login attempts. Please try again after 15 minutes." },
+    keyGenerator: (req) => `login-acc:${ipKeyGenerator(req.ip || "127.0.0.1")}:${getNormalizedEmailFromReq(req)}`,
+    message: { message: "Too many login attempts for this account. Please try again after 15 minutes." },
 });
 
-const otpLimiter = rateLimit({
+const loginIpLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: process.env.NODE_ENV === "production" ? 100 : 300,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => `login-ip:${ipKeyGenerator(req.ip || "127.0.0.1")}`,
+    message: { message: "Too many login attempts from this network. Please try again after 15 minutes." },
+});
+
+const loginLimiter = [loginIpLimiter, loginAccountLimiter];
+
+const otpAccountLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: process.env.NODE_ENV === "production" ? 20 : 60,
     standardHeaders: true,
     legacyHeaders: false,
-    message: "Too many OTP attempts. Please try again later.",
+    keyGenerator: (req) => `otp-acc:${ipKeyGenerator(req.ip || "127.0.0.1")}:${getNormalizedOtpIdentityFromReq(req)}`,
+    message: { message: "Too many OTP attempts for this session. Please try again later." },
 });
+
+const otpIpLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: process.env.NODE_ENV === "production" ? 100 : 300,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => `otp-ip:${ipKeyGenerator(req.ip || "127.0.0.1")}`,
+    message: { message: "Too many OTP attempts from this network. Please try again later." },
+});
+
+const otpLimiter = [otpIpLimiter, otpAccountLimiter];
 
 const loggingLimiter = rateLimit({
     windowMs: 15 * 60 * 1000,
@@ -331,34 +382,34 @@ app.post("/api/auth/validate_pwa_cache_integrity", logPayloadSizeLimiter, loggin
 
 // Product Routes
 app.get("/api/categories", authenticateJWT, CategoryController.list);
-app.post("/api/categories", authenticateJWT, requireRole("admin"), CategoryController.create);
-app.put("/api/categories/:id", authenticateJWT, requireRole("admin"), CategoryController.update);
+app.post("/api/categories", authenticateJWT, requireRoles(["admin", "manager"]), CategoryController.create);
+app.put("/api/categories/:id", authenticateJWT, requireRoles(["admin", "manager"]), CategoryController.update);
 app.delete("/api/categories/:id", authenticateJWT, requireRole("admin"), CategoryController.delete);
 app.get("/api/products", authenticateJWT, ProductController.getAllProducts);
-app.get("/api/products/template", authenticateJWT, ProductController.getImportTemplate);
-app.post("/api/products/import", authenticateJWT, requireRole("admin"), handleProductImportUpload, ProductController.importProducts);
-app.get("/api/inventory/alerts", authenticateJWT, ProductController.getInventoryAlerts);
-app.get("/api/inventory/predictions", authenticateJWT, InventoryPredictionController.getPredictions);
+app.get("/api/products/template", authenticateJWT, requireRoles(["admin", "manager"]), ProductController.getImportTemplate);
+app.post("/api/products/import", authenticateJWT, requireRoles(["admin", "manager"]), handleProductImportUpload, ProductController.importProducts);
+app.get("/api/inventory/alerts", authenticateJWT, requireRoles(["supervisor", "manager", "admin"]), ProductController.getInventoryAlerts);
+app.get("/api/inventory/predictions", authenticateJWT, requireRoles(["manager", "admin"]), InventoryPredictionController.getPredictions);
 app.get("/api/products/:id", authenticateJWT, ProductController.getProduct);
-app.post("/api/products", authenticateJWT, requireRole("admin"), ProductController.createProduct);
-app.put("/api/products/:id", authenticateJWT, requireRole("admin"), ProductController.updateProduct);
+app.post("/api/products", authenticateJWT, requireRoles(["admin", "manager"]), ProductController.createProduct);
+app.put("/api/products/:id", authenticateJWT, requireRoles(["admin", "manager"]), ProductController.updateProduct);
 app.delete("/api/products/:id", authenticateJWT, requireRole("admin"), ProductController.deleteProduct);
 
 // Sales Routes
 app.get("/api/sales", authenticateJWT, SalesController.getAllSales);
-app.post("/api/sales/checkouts", authenticateJWT, requireRoles(["cashier", "admin"]), CheckoutController.reserve);
-app.get("/api/sales/checkouts/:checkoutSessionId", authenticateJWT, requireRoles(["cashier", "admin"]), CheckoutController.get);
-app.post("/api/sales/checkouts/:checkoutSessionId/cancel", authenticateJWT, requireRoles(["cashier", "admin"]), CheckoutController.cancel);
-app.post("/api/sales", authenticateJWT, requireRoles(["cashier", "admin"]), SalesController.createSale);
-app.get("/api/store-credits/:barcode", authenticateJWT, requireRoles(["cashier", "admin"]), SalesController.getStoreCreditBalance);
-app.post("/api/sales/park", authenticateJWT, SalesController.parkSale);
+app.post("/api/sales/checkouts", authenticateJWT, requireRoles(["cashier", "supervisor", "manager", "admin"]), CheckoutController.reserve);
+app.get("/api/sales/checkouts/:checkoutSessionId", authenticateJWT, requireRoles(["cashier", "supervisor", "manager", "admin"]), CheckoutController.get);
+app.post("/api/sales/checkouts/:checkoutSessionId/cancel", authenticateJWT, requireRoles(["cashier", "supervisor", "manager", "admin"]), CheckoutController.cancel);
+app.post("/api/sales", authenticateJWT, requireRoles(["cashier", "supervisor", "manager", "admin"]), SalesController.createSale);
+app.get("/api/store-credits/:barcode", authenticateJWT, requireRoles(["cashier", "supervisor", "manager", "admin"]), SalesController.getStoreCreditBalance);
+app.post("/api/sales/park", authenticateJWT, requireRoles(["cashier", "supervisor", "manager", "admin"]), SalesController.parkSale);
 app.get("/api/sales/parked", authenticateJWT, SalesController.getParkedSales);
 app.get("/api/sales/:id", authenticateJWT, SalesController.getSaleById);
 
 // Customer invoice and receivables routes
-app.get("/api/invoices", authenticateJWT, InvoiceController.list);
-app.get("/api/invoices/:invoiceId/payments", authenticateJWT, InvoiceController.listPayments);
-app.post("/api/invoices/:invoiceId/payments", authenticateJWT, InvoiceController.recordPayment);
+app.get("/api/invoices", authenticateJWT, requireRoles(["supervisor", "manager", "admin"]), InvoiceController.list);
+app.get("/api/invoices/:invoiceId/payments", authenticateJWT, requireRoles(["supervisor", "manager", "admin"]), InvoiceController.listPayments);
+app.post("/api/invoices/:invoiceId/payments", authenticateJWT, requireRoles(["supervisor", "manager", "admin"]), InvoiceController.recordPayment);
 // app.post("/api/sales/:id/void", authenticateJWT, requireRole("admin"), SalesController.voidSale); // DEPRECATED: Returns now go through Return Engine
 
 // Returns & Refunds Workflow
@@ -376,36 +427,36 @@ app.post("/admin/returns/reject/:id", authenticateJWT, requireRoles(["supervisor
 app.get("/api/customers", authenticateJWT, CustomerController.getAllCustomers);
 app.get("/api/customers/:id", authenticateJWT, CustomerController.getCustomer);
 app.post("/api/customers", authenticateJWT, CustomerController.createCustomer);
-app.put("/api/customers/:id", authenticateJWT, CustomerController.updateCustomer);
+app.put("/api/customers/:id", authenticateJWT, requireRoles(["supervisor", "manager", "admin"]), CustomerController.updateCustomer);
 app.delete("/api/customers/:id", authenticateJWT, requireRole("admin"), CustomerController.deleteCustomer);
 
 // Vendor Routes
-app.get("/api/vendors", authenticateJWT, VendorController.getAllVendors);
-app.get("/api/vendors/:id", authenticateJWT, VendorController.getVendor);
-app.post("/api/vendors", authenticateJWT, requireRole("admin"), VendorController.createVendor);
-app.put("/api/vendors/:id", authenticateJWT, requireRole("admin"), VendorController.updateVendor);
+app.get("/api/vendors", authenticateJWT, requireRoles(["manager", "admin"]), VendorController.getAllVendors);
+app.get("/api/vendors/:id", authenticateJWT, requireRoles(["manager", "admin"]), VendorController.getVendor);
+app.post("/api/vendors", authenticateJWT, requireRoles(["manager", "admin"]), VendorController.createVendor);
+app.put("/api/vendors/:id", authenticateJWT, requireRoles(["manager", "admin"]), VendorController.updateVendor);
 app.delete("/api/vendors/:id", authenticateJWT, requireRole("admin"), VendorController.deleteVendor);
-app.get("/api/vendor-portal", authenticateJWT, VendorController.getPortalData);
+app.get("/api/vendor-portal", authenticateJWT, requireRoles(["manager", "admin"]), VendorController.getPortalData);
 
 // Purchase Order Routes
-app.get("/api/purchase-orders", authenticateJWT, PurchaseOrderController.getAll);
-app.get("/api/purchase-orders/:id", authenticateJWT, PurchaseOrderController.getById);
-app.post("/api/purchase-orders", authenticateJWT, requireRole("admin"), PurchaseOrderController.create);
-app.put("/api/purchase-orders/:id/status", authenticateJWT, requireRole("admin"), PurchaseOrderController.updateStatus);
-app.post("/api/purchase-orders/:id/email", authenticateJWT, requireRole("admin"), PurchaseOrderController.sendEmail);
-app.post("/api/purchase-orders/:id/receive", authenticateJWT, requireRole("admin"), PurchaseOrderController.receive);
-app.get("/api/delivery-notes", authenticateJWT, PurchaseOrderController.getDeliveryNotes);
-app.get("/api/delivery-notes/:id", authenticateJWT, PurchaseOrderController.getDeliveryNoteById);
+app.get("/api/purchase-orders", authenticateJWT, requireRoles(["manager", "admin"]), PurchaseOrderController.getAll);
+app.get("/api/purchase-orders/:id", authenticateJWT, requireRoles(["manager", "admin"]), PurchaseOrderController.getById);
+app.post("/api/purchase-orders", authenticateJWT, requireRoles(["manager", "admin"]), PurchaseOrderController.create);
+app.put("/api/purchase-orders/:id/status", authenticateJWT, requireRoles(["manager", "admin"]), PurchaseOrderController.updateStatus);
+app.post("/api/purchase-orders/:id/email", authenticateJWT, requireRoles(["manager", "admin"]), PurchaseOrderController.sendEmail);
+app.post("/api/purchase-orders/:id/receive", authenticateJWT, requireRoles(["supervisor", "manager", "admin"]), PurchaseOrderController.receive);
+app.get("/api/delivery-notes", authenticateJWT, requireRoles(["supervisor", "manager", "admin"]), PurchaseOrderController.getDeliveryNotes);
+app.get("/api/delivery-notes/:id", authenticateJWT, requireRoles(["supervisor", "manager", "admin"]), PurchaseOrderController.getDeliveryNoteById);
 
 // Procurement (Invoices & Requisitions) Routes
-app.get("/api/procurement/invoices", authenticateJWT, ProcurementController.listSupplierInvoices);
-app.get("/api/procurement/supplier-invoices", authenticateJWT, ProcurementController.listSupplierInvoices);
-app.get("/api/procurement/supplier-invoices/:invoiceId/payments", authenticateJWT, ProcurementController.listSupplierPayments);
-app.post("/api/procurement/invoice", authenticateJWT, requireRole("admin"), ProcurementController.createSupplierInvoice);
-app.post("/api/procurement/invoices", authenticateJWT, requireRole("admin"), ProcurementController.createSupplierInvoice);
-app.post("/api/procurement/supplier-invoices", authenticateJWT, requireRole("admin"), ProcurementController.createSupplierInvoice);
-app.post("/api/procurement/supplier-invoices/:invoiceId/payments", authenticateJWT, requireRole("admin"), ProcurementController.recordSupplierPayment);
-app.put("/api/procurement/requisitions/:id/status", authenticateJWT, requireRole("admin"), ProcurementController.updateRequisitionStatus);
+app.get("/api/procurement/invoices", authenticateJWT, requireRoles(["manager", "admin"]), ProcurementController.listSupplierInvoices);
+app.get("/api/procurement/supplier-invoices", authenticateJWT, requireRoles(["manager", "admin"]), ProcurementController.listSupplierInvoices);
+app.get("/api/procurement/supplier-invoices/:invoiceId/payments", authenticateJWT, requireRoles(["manager", "admin"]), ProcurementController.listSupplierPayments);
+app.post("/api/procurement/invoice", authenticateJWT, requireRoles(["manager", "admin"]), ProcurementController.createSupplierInvoice);
+app.post("/api/procurement/invoices", authenticateJWT, requireRoles(["manager", "admin"]), ProcurementController.createSupplierInvoice);
+app.post("/api/procurement/supplier-invoices", authenticateJWT, requireRoles(["manager", "admin"]), ProcurementController.createSupplierInvoice);
+app.post("/api/procurement/supplier-invoices/:invoiceId/payments", authenticateJWT, requireRoles(["manager", "admin"]), ProcurementController.recordSupplierPayment);
+app.put("/api/procurement/requisitions/:id/status", authenticateJWT, requireRoles(["manager", "admin"]), ProcurementController.updateRequisitionStatus);
 
 // Shift / Cash Drawer Reconciliation Routes
 app.post("/api/shifts/open", authenticateJWT, ShiftController.openShift);
@@ -421,8 +472,8 @@ app.delete("/api/warehouses/:id", authenticateJWT, requireRole("admin"), Warehou
 
 // Dashboard Routes
 app.get("/api/dashboard/stats", authenticateJWT, DashboardController.getDashboardStats);
-app.get("/api/reports/summary", authenticateJWT, ReportController.getSummary);
-app.get("/api/inventory/movements", authenticateJWT, StockMovementController.list);
+app.get("/api/reports/summary", authenticateJWT, requireRoles(["supervisor", "manager", "admin"]), ReportController.getSummary);
+app.get("/api/inventory/movements", authenticateJWT, requireRoles(["supervisor", "manager", "admin"]), StockMovementController.list);
 
 // Admin user management and settings
 app.get("/api/users", authenticateJWT, requireRole("admin"), UserAdminController.listUsers);
@@ -438,25 +489,25 @@ app.get("/api/company-logo", LoyaltyController.getCompanyLogo);
 app.post("/api/settings", authenticateJWT, requireRole("admin"), LoyaltyController.saveSettings);
 app.post("/api/settings/company-logo", authenticateJWT, requireRole("admin"), handleCompanyLogoUpload, LoyaltyController.uploadCompanyLogo);
 app.delete("/api/settings/company-logo", authenticateJWT, requireRole("admin"), LoyaltyController.deleteCompanyLogo);
-app.get("/api/loyalty/settings", authenticateJWT, LoyaltyController.getSettings);
+app.get("/api/loyalty/settings", authenticateJWT, requireRoles(["supervisor", "manager", "admin"]), LoyaltyController.getSettings);
 app.post("/api/loyalty/settings", authenticateJWT, requireRole("admin"), LoyaltyController.saveSettings);
 app.get("/api/loyalty/members", authenticateJWT, LoyaltyController.getMembers);
-app.post("/api/loyalty/members", authenticateJWT, requireRole("admin"), LoyaltyController.createMember);
-app.post("/api/loyalty/members/:id/points", authenticateJWT, requireRole("admin"), LoyaltyController.addPoints);
-app.post("/api/loyalty/members/:id/redeem", authenticateJWT, requireRole("admin"), LoyaltyController.redeemPoints);
+app.post("/api/loyalty/members", authenticateJWT, requireRoles(["cashier", "supervisor", "manager", "admin"]), LoyaltyController.createMember);
+app.post("/api/loyalty/members/:id/points", authenticateJWT, requireRoles(["manager", "admin"]), LoyaltyController.addPoints);
+app.post("/api/loyalty/members/:id/redeem", authenticateJWT, requireRoles(["cashier", "supervisor", "manager", "admin"]), LoyaltyController.redeemPoints);
 
 // Inventory Discrepancy Routes
-app.get("/api/inventory/adjustments", authenticateJWT, InventoryController.getAdjustments);
+app.get("/api/inventory/adjustments", authenticateJWT, requireRoles(["supervisor", "manager", "admin"]), InventoryController.getAdjustments);
 app.post("/api/inventory/adjustment", authenticateJWT, requireRoles(["admin", "manager", "supervisor"]), InventoryController.createAdjustment);
 app.post("/api/inventory/adjustments", authenticateJWT, requireRoles(["admin", "manager", "supervisor"]), InventoryController.createAdjustment);
 
-app.get("/api/inventory/transfers", authenticateJWT, InventoryController.getTransfers);
+app.get("/api/inventory/transfers", authenticateJWT, requireRoles(["supervisor", "manager", "admin"]), InventoryController.getTransfers);
 app.post("/api/inventory/transfer", authenticateJWT, requireRoles(["admin", "manager", "supervisor"]), InventoryController.createTransfer);
 app.post("/api/inventory/transfers", authenticateJWT, requireRoles(["admin", "manager", "supervisor"]), InventoryController.createTransfer);
 app.put("/api/inventory/transfer/:id/status", authenticateJWT, requireRoles(["admin", "manager", "supervisor"]), InventoryController.updateTransferStatus);
 app.put("/api/inventory/transfers/:id/status", authenticateJWT, requireRoles(["admin", "manager", "supervisor"]), InventoryController.updateTransferStatus);
 
-app.get("/api/inventory/stock-takes", authenticateJWT, InventoryController.getAllStockTakes);
+app.get("/api/inventory/stock-takes", authenticateJWT, requireRoles(["supervisor", "manager", "admin"]), InventoryController.getAllStockTakes);
 app.post("/api/inventory/stock-takes", authenticateJWT, requireRoles(["admin", "manager", "supervisor"]), InventoryController.initiateStockTake);
 app.post("/api/inventory/stock-takes/initiate", authenticateJWT, requireRoles(["admin", "manager", "supervisor"]), InventoryController.initiateStockTake);
 app.put("/api/inventory/stock-takes/:id/items", authenticateJWT, requireRoles(["admin", "manager", "supervisor"]), InventoryController.updateStockTakeCounts);
@@ -470,12 +521,12 @@ app.put("/api/taxes/:id", authenticateJWT, requireRole("admin"), TaxController.u
 app.delete("/api/taxes/:id", authenticateJWT, requireRole("admin"), TaxController.delete);
 
 // Payment Webhooks
-app.post("/api/payments/mpesa/stk-push", authenticateJWT, requireRoles(["cashier", "admin"]), PaymentController.initiateMpesaStk);
-app.get("/api/payments/mpesa/config", authenticateJWT, requireRoles(["cashier", "admin"]), PaymentController.getMpesaPaymentConfig);
-app.post("/api/payments/mpesa/paybill-intent", authenticateJWT, requireRoles(["cashier", "admin"]), PaymentController.initiateMpesaPaybill);
+app.post("/api/payments/mpesa/stk-push", authenticateJWT, requireRoles(["cashier", "supervisor", "manager", "admin"]), PaymentController.initiateMpesaStk);
+app.get("/api/payments/mpesa/config", authenticateJWT, requireRoles(["cashier", "supervisor", "manager", "admin"]), PaymentController.getMpesaPaymentConfig);
+app.post("/api/payments/mpesa/paybill-intent", authenticateJWT, requireRoles(["cashier", "supervisor", "manager", "admin"]), PaymentController.initiateMpesaPaybill);
 app.post("/api/payments/mpesa/c2b/register", authenticateJWT, requireRole("admin"), PaymentController.registerMpesaC2bUrls);
-app.get("/api/payments/mpesa/session/:checkoutSessionId", authenticateJWT, requireRoles(["cashier", "admin"]), PaymentController.getMpesaSessionStatus);
-app.get("/api/payments/mpesa/:checkoutRequestId", authenticateJWT, requireRoles(["cashier", "admin"]), PaymentController.getMpesaStatus);
+app.get("/api/payments/mpesa/session/:checkoutSessionId", authenticateJWT, requireRoles(["cashier", "supervisor", "manager", "admin"]), PaymentController.getMpesaSessionStatus);
+app.get("/api/payments/mpesa/:checkoutRequestId", authenticateJWT, requireRoles(["cashier", "supervisor", "manager", "admin"]), PaymentController.getMpesaStatus);
 app.post("/api/webhooks/mpesa/callback", PaymentController.mpesaCallback);
 app.post("/api/webhooks/mpesa/c2b/validation", PaymentController.mpesaC2bValidation);
 app.post("/api/webhooks/mpesa/c2b/confirmation", PaymentController.mpesaC2bConfirmation);

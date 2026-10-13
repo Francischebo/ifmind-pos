@@ -217,7 +217,8 @@ export class ShiftController {
 
     static async getAllShifts(req: AuthenticatedRequest, res: Response) {
         try {
-            const whereClause = req.user!.role === "admin" ? {} : { cashier_id: req.user!.id };
+            const canViewAll = ["supervisor", "manager", "admin"].includes(req.user!.role);
+            const whereClause = canViewAll ? {} : { cashier_id: req.user!.id };
             const shifts = await shiftRepo.find({
                 where: whereClause,
                 relations: ["cashier"],

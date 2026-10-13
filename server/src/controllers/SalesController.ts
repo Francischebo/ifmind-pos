@@ -279,12 +279,15 @@ export const sanitizeParkedSalePayload = (input: unknown): SanitizedParkedSalePa
 };
 
 export class SalesController {
-    static async getAllSales(req: Request, res: Response) {
+    static async getAllSales(req: AuthenticatedRequest, res: Response) {
         try {
             const etimsStatus = typeof req.query.etims_status === "string" ? req.query.etims_status.trim().toLowerCase() : undefined;
             const whereClause: Record<string, unknown> = {};
             if (etimsStatus && etimsStatus !== "all") {
                 whereClause.etims_status = etimsStatus;
+            }
+            if (req.user?.role === "cashier") {
+                whereClause.cashier = { id: req.user.id };
             }
             const sales = await saleRepository.find({
                 where: Object.keys(whereClause).length > 0 ? whereClause : undefined,
@@ -1164,8 +1167,12 @@ export class SalesController {
 
     static async getParkedSales(req: AuthenticatedRequest, res: Response) {
         try {
+            const isManagerial = ["supervisor", "manager", "admin"].includes(req.user?.role || "");
+            const whereClause = isManagerial
+                ? { status: SaleStatus.PARKED }
+                : { status: SaleStatus.PARKED, cashier: { id: req.user!.id } };
             const sales = await saleRepository.find({
-                where: { status: SaleStatus.PARKED, cashier: { id: req.user!.id } },
+                where: whereClause,
                 relations: ["items", "items.product", "customer", "warehouse"]
             });
             res.json(sales);

@@ -186,7 +186,9 @@ export class AuthController {
                 relations: ["profile"]
             });
 
+            const DUMMY_BCRYPT_HASH = "$2a$10$wK1Gv5K4o2J/6HkM3k5mEuOq0.Xv0YVz1A1vL1vH5zXwVb6m5yZ5G";
             if (!user) {
+                await bcrypt.compare(password, DUMMY_BCRYPT_HASH);
                 return res.status(400).json({ message: "Invalid credentials" });
             }
 
@@ -196,7 +198,7 @@ export class AuthController {
             }
 
             if (!user.is_active) {
-                return res.status(403).json({ message: "Account disabled" });
+                return res.status(400).json({ message: "Invalid credentials" });
             }
 
             // Invalidate any previously active OTPs for this user
@@ -214,6 +216,7 @@ export class AuthController {
             otpObj.user = user;
             otpObj.code_hash = otpHash;
             otpObj.expires_at = expiresAt;
+            otpObj.attempts = 0;
             await otpRepository.save(otpObj);
 
             const otpSent = await EmailService.sendOtpEmail(user.email, rawOtp);
@@ -294,7 +297,14 @@ export class AuthController {
 
             const isMatch = await bcrypt.compare(code, activeOtp.code_hash);
             if (!isMatch) {
-                 return res.status(400).json({ message: "Invalid OTP code" });
+                activeOtp.attempts = (activeOtp.attempts || 0) + 1;
+                if (activeOtp.attempts >= 5) {
+                    activeOtp.is_used = true;
+                    await otpRepository.save(activeOtp);
+                    return res.status(400).json({ message: "Too many failed attempts. This OTP has been invalidated. Please log in again." });
+                }
+                await otpRepository.save(activeOtp);
+                return res.status(400).json({ message: "Invalid OTP code" });
             }
 
             // Mark verified

@@ -230,7 +230,13 @@ const run = async () => {
 
         const apiResult = spawnSync(
             process.execPath,
-            ["--require", "ts-node/register", "--test", "src/tests/business-workflow.integration.test.ts"],
+            [
+                "--require",
+                "ts-node/register",
+                "--test",
+                "src/tests/business-workflow.integration.test.ts",
+                "src/tests/permission-matrix.integration.test.ts",
+            ],
             { cwd: process.cwd(), stdio: "inherit", env: testEnvironment }
         );
         if (apiResult.error) throw apiResult.error;

@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import { AuthenticatedRequest } from "../middleware/auth";
 import { AppDataSource } from "../data-source";
 import { Sale, SaleStatus } from "../entity/Sale";
 import { SaleItem } from "../entity/SaleItem";
@@ -8,7 +9,7 @@ import { MoreThanOrEqual } from "typeorm";
 import { InventoryService } from "../services/InventoryService";
 
 export class DashboardController {
-    static async getDashboardStats(req: Request, res: Response) {
+    static async getDashboardStats(req: AuthenticatedRequest, res: Response) {
         try {
             const today = new Date();
             today.setHours(0, 0, 0, 0);
@@ -17,6 +18,54 @@ export class DashboardController {
             const saleItemRepo = AppDataSource.getRepository(SaleItem);
             const productRepo = AppDataSource.getRepository(Product);
             const customerRepo = AppDataSource.getRepository(Customer);
+
+            if (req.user?.role === "cashier") {
+                const cashierSalesData = await saleRepo.find({
+                    where: {
+                        cashier: { id: req.user.id },
+                        status: SaleStatus.COMPLETED,
+                        created_at: MoreThanOrEqual(today)
+                    },
+                    order: { created_at: "DESC" }
+                });
+
+                const todaySales = cashierSalesData.reduce((sum, sale) => sum + Number(sale.total_amount), 0);
+                const todayTransactions = cashierSalesData.length;
+
+                const recentTransactions = cashierSalesData.slice(0, 5).map(sale => ({
+                    id: sale.id,
+                    time: sale.created_at.toLocaleTimeString('en-KE'),
+                    amount: Number(sale.total_amount),
+                    method: sale.payment_method
+                }));
+
+                const paymentSummary = new Map<string, number>();
+                for (const sale of cashierSalesData) {
+                    const method = sale.payment_method;
+                    paymentSummary.set(
+                        method,
+                        (paymentSummary.get(method) || 0) + Number(sale.total_amount),
+                    );
+                }
+
+                const salesByMethod = Array.from(paymentSummary, ([method, amount]) => ({
+                    method,
+                    amount,
+                    percentage: todaySales > 0 ? (amount / todaySales) * 100 : 0
+                }));
+
+                return res.json({
+                    todaySales,
+                    todayTransactions,
+                    recentTransactions,
+                    salesByMethod,
+                    weeklyTrend: [],
+                    topProducts: [],
+                    totalProducts: 0,
+                    lowStockCount: 0,
+                    totalCustomers: 0
+                });
+            }
 
             // Get today's sales
             const todaySalesData = await saleRepo.find({
