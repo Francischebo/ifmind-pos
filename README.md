@@ -1,22 +1,23 @@
-# IFMind-POS - Professional Wholesale Point of Sale System
+# cfi-POS - Professional Retail & Wholesale Point of Sale System
 
 ## Project Overview
 
-**CFI-POS Techiez** is a wholesale point-of-sale system for inventory management, sales tracking, customer management, and reporting. It can be installed from its production HTTPS website as a PWA; its offline workflow is intentionally limited to provisional walk-in cash sales from a previously cached catalogue.
+**cfi-POS** (developed by **cfi-POS Techiez Limited Company**) is an enterprise retail and wholesale point-of-sale system engineered for Kenyan retail businesses. It features M-Pesa payments (STK Push and C2B Paybill), KRA eTIMS tax fiscalization architecture, offline-first cashier tills, multi-warehouse inventory management, returns & refunds, store credit, shifts, and double-entry accounting.
 
 ## Key Features
 
-- 📱 **Progressive Web App (PWA)** - Install from the HTTPS website on supported devices
-- 🔐 **Role-Based Access Control** - Admin and Cashier roles with specific permissions
-- 📊 **Real-Time Dashboard** - Track sales, inventory, and low stock alerts
-- 🛒 **Point of Sale** - Fast checkout with barcode scanning support
-- 💰 **Multiple Payment Methods** - Cash and M-Pesa integration
-- 📦 **Inventory Management** - Track stock levels, costs, and pricing
-- 👥 **Customer Management** - Maintain customer records and transaction history
-- 🏢 **Vendor Management** - Track suppliers and purchase orders
-- 📈 **Reports & Analytics** - Sales reports, inventory reports, and more
-- 🔄 **Limited Offline POS** - Queue provisional walk-in cash sales and sync for server verification when reconnected
-- 🎨 **Responsive Design** - Works on all devices from mobile to desktop
+- 📱 **Progressive Web App (PWA)** - Installable on desktop and mobile with offline caching
+- 🔐 **4-Tier Role-Based Access Control** - Cashier, Supervisor, Manager, and Admin permissions
+- 📊 **Real-Time Dashboard & Observability** - Sales metrics, stock alerts, health probes, and structured logging
+- 🛒 **Point of Sale** - High-speed checkout, barcode scanning, cart parking, and stock reservations
+- 💰 **Multiple Tender Channels** - Cash, M-Pesa STK Push, M-Pesa Paybill C2B, and Store Credit
+- 🔄 **Returns & Refunds Workflow** - Multi-item returns, manager approval, cash/M-Pesa/credit refunds, and sellable/damaged inventory triage
+- 📦 **Multi-Warehouse Logistics** - Inter-warehouse stock transfers, physical stock takes, and batch/expiry tracking
+- 🧾 **KRA eTIMS Architecture** - Pluggable tax compliance engine (`off`, `mock`, `live`) with scannable QR verification
+- 👥 **Customer & Receivables** - Customer CRM, B2B credit invoicing, receivables tracking, and loyalty rewards
+- 🏢 **Procurement & Payables** - Vendor records, purchase orders, 3-way matching goods receiving, and supplier invoices
+- ⚖️ **Double-Entry Accounting** - Automated balanced journal entries, chart of accounts, and financial reports
+- 🔄 **Offline-First Tills** - Provisional offline cash sales with IndexedDB queue and conflict resolution upon reconnect
 
 ## Technologies Used
 
@@ -117,11 +118,9 @@ M-Pesa callback URLs include a random per-request token; server request logs omi
 
 The repository includes production-oriented API, web, and PostgreSQL containers managed by Compose. PostgreSQL stores data in the persistent `postgres-data` named volume, is health-checked before the API starts, and is not published on a host port. The web container serves the built frontend and proxies `/api` and `/socket.io` (including WebSocket upgrades) to the API, so the browser uses one origin. Terminate public HTTPS at a trusted reverse proxy or load balancer in front of the web container.
 
-By default, the API connects to the Compose PostgreSQL service using `POSTGRES_DB`, `POSTGRES_USER`, and `POSTGRES_PASSWORD`. The password must be URL-safe; the recommended 64-character hexadecimal secret is URL-safe. `DATABASE_URL` can optionally override this to connect the API to a separately managed PostgreSQL service. For a new, dedicated empty database, use the guarded Docker bootstrap command below; for an existing database, back it up and apply only reviewed pending TypeORM migrations. The Supabase-specific `database_migrations.sql` is not a generic PostgreSQL initializer.
+By default, the API connects to the Compose PostgreSQL service using `POSTGRES_DB`, `POSTGRES_USER`, and `POSTGRES_PASSWORD`. The password must be URL-safe; the recommended 64-character hexadecimal secret is URL-safe. `DATABASE_URL` can optionally override this to connect the API to a separately managed PostgreSQL service. For a new, dedicated empty database, use the guarded Docker bootstrap command below; for an existing database, back it up and apply only reviewed pending TypeORM migrations.
 
-The application frontend and API use the TypeORM/PostgreSQL backend; Supabase is not required. The repository retains separate Supabase SQL/Edge Function assets for deployments that explicitly choose to use those optional extensions. Do not apply Supabase migrations or `database_migrations.sql` to provision the PostgreSQL-only application database.
-
-For a **new, dedicated PostgreSQL database only**, the backend provides a guarded bootstrap command. It refuses maintenance/template databases, any non-empty `public` schema, and databases with recorded TypeORM migrations. It builds the current baseline from TypeORM entity metadata and applies every TypeORM migration; the regular API startup never synchronizes the schema. This flow does not require a Supabase project or Supabase credentials.
+For a **new, dedicated PostgreSQL database only**, the backend provides a guarded bootstrap command. It refuses maintenance/template databases, any non-empty `public` schema, and databases with recorded TypeORM migrations. It builds the current baseline from TypeORM entity metadata and applies every TypeORM migration; the regular API startup never synchronizes the schema. This flow ensures schema repeatability across local Docker, VPS, and cloud environments without manual DDL execution.
 
 ```powershell
 cd server
@@ -243,26 +242,7 @@ If users log in, verify OTP, but are immediately redirected back to the login sc
 4. Set `FRONTEND_URL` and `CORS_ORIGINS` on Render to the exact Vercel production origin and any custom frontend domains, comma-separated. Add only known stable Vercel preview origins that need API access; do not allow arbitrary `*.vercel.app` origins.
 5. Deploy from Vercel once. After that, Vercel automatically builds and deploys each push to the connected GitHub repository. Review Vercel's deployment status/checks on GitHub.
 
-The Vercel build deliberately fails with an actionable error if `VITE_API_URL` is missing, is not HTTPS (unless using relative `/api`), or does not end in `/api`. Vite embeds this public API URL at build time, so changing it requires a new deployment. Supabase variables are not required. Database credentials, `JWT_SECRET`, `ENCRYPTION_KEY`, and payment-provider secrets belong only on the API host and must never be added as `VITE_` variables. Deploy backend migrations on the API host using the existing TypeORM migration instructions before releasing backend updates.
-
-#### Optional Supabase extension assets
-
-The main POS application does not call Supabase; its authenticated API and transactional sale route use PostgreSQL through TypeORM. The following SQL migration applies only if separately deploying the repository's optional Supabase extension assets. It is not needed for the PostgreSQL-only setup.
-
-The Supabase migration `20261005204500_restrict_secure_sale_rpc.sql` revokes execution of the unused `public.create_secure_sale` SECURITY DEFINER RPC from all API roles. To verify grants directly in a Supabase project after applying that optional migration, run:
-
-```sql
-SELECT
-  has_function_privilege('anon', p.oid, 'EXECUTE') AS anon_can_execute,
-  has_function_privilege('authenticated', p.oid, 'EXECUTE') AS authenticated_can_execute,
-  has_function_privilege('service_role', p.oid, 'EXECUTE') AS service_role_can_execute
-FROM pg_proc p
-JOIN pg_namespace n ON n.oid = p.pronamespace
-WHERE n.nspname = 'public'
-  AND p.proname = 'create_secure_sale';
-```
-
-Every returned row must have all three values `false`; zero rows means the RPC does not exist. The SQL migration aborts if any API role can execute the function. The database owner and superusers retain their inherent administrative ability; keep those credentials restricted.
+The Vercel build deliberately fails with an actionable error if `VITE_API_URL` is missing, is not HTTPS (unless using relative `/api`), or does not end in `/api`. Vite embeds this public API URL at build time, so changing it requires a new deployment. Database credentials, `JWT_SECRET`, `ENCRYPTION_KEY`, and payment-provider secrets belong only on the API host and must never be added as `VITE_` variables. Deploy backend migrations on the API host using the existing TypeORM migration instructions before releasing backend updates.
 
 ### Paybill and checkout-reservation deployment
 
@@ -284,22 +264,34 @@ Checkout reservations intentionally remain active until a checkout is completed 
 
 M-Pesa return approval does not send a payout. It records the customer refund as payable; a supervisor, manager, or admin must complete the payout through Safaricom and then record the successful receipt on the Returns page. Only that receipt confirmation settles the payable and adjusts the confirming user's open-shift M-Pesa total. Migration `1791030000001-AddMpesaRefundSettlement` marks legacy approved M-Pesa returns as pending; reconcile those records against Safaricom before recording receipts.
 
-## User Roles
-
-### Admin
-- Full access to all features
-- Product management (add, edit, delete)
-- User management
-- Vendor management
-- Access to all reports and analytics
-- Purchase order management
+## User Roles & Access Control
 
 ### Cashier
-- Point of sale operations
-- View products and inventory
-- Customer management
-- View own sales history
-- Process payments (cash/M-Pesa)
+- Point of sale checkout and barcode scanning
+- Catalogue search and stock availability
+- Walk-in customer registration
+- Initiate customer return requests
+- Open/close assigned cashier shift and cash drawer
+
+### Supervisor
+- All Cashier capabilities
+- Managerial override for return and refund approvals
+- Return inventory triage (sellable restock vs damaged shrinkage)
+- Shift float oversight and discrepancy auditing
+
+### Manager
+- All Supervisor capabilities
+- Catalog updates (products, categories, pricing, units of measure)
+- Inventory management (transfers, stock takes, manual adjustments)
+- Procurement (purchase orders, receiving, supplier invoices)
+- Customer accounts receivable and credit limits
+
+### Admin
+- Unrestricted access across the application
+- System settings, store configuration, tax rates, and branding
+- Staff provisioning and role assignment
+- Double-entry accounting chart of accounts and journal logs
+- Security logs and operational monitoring
 
 ## Offline Functionality
 
@@ -315,22 +307,25 @@ For workstation and mobile installation, per-device offline preparation, outage 
 
 ## Security Features
 
-- Role-based access control (RBAC)
-- Row Level Security (RLS) policies
-- Secure authentication with Supabase
-- Input validation on all forms
-- Protected API endpoints
+- **4-Tier RBAC**: Granular permission enforcement at HTTP endpoint and middleware layers
+- **Two-Factor Authentication**: Single-use, time-limited 6-digit email OTP via Resend with brute-force attempt limits
+- **Secure Session Management**: Tamper-proof, httpOnly, SameSite cookies (`jwt_token`) safeguarding tokens against XSS
+- **At-Rest Column Encryption**: AES-256 (`pgcrypto`) encryption for sensitive customer and transaction PII
+- **Hardened HTTP Headers**: Strict Content-Security-Policy (CSP), framing protection, and origin filtering
+- **Rate Limiting**: Multi-tiered rate limiters for login, OTP verification, and high-frequency endpoints
+- **Fail-Fast Startup Validation**: Production configuration audit halting startup if weak secrets are detected
 
 ## Support & Documentation
 
-For support or questions about IFMind-POS:
-- Contact: **IFMind Tech**
-- Email: [EMAIL_ADDRESS]
+For support or enterprise deployment inquiries about cfi-POS:
+- **Organization**: cfi-POS Techiez Limited Company
+- **Email**: support@cfipos.techiez.co.ke
+- **Guides**: [DEPLOYMENT_CHECKLIST.md](./DEPLOYMENT_CHECKLIST.md) | [BACKUP_AND_RECOVERY.md](./docs/BACKUP_AND_RECOVERY.md) | [FEATURES.md](./FEATURES.md)
 
 ## License
 
-© 2024 IFMind Tech Solutions. All rights reserved.
+© 2026 cfi-POS Techiez Limited Company. All rights reserved.
 
 ---
 
-**Built with ❤️ by  IFMIND Tech Solutions**
+**Built with pride by cfi-POS Techiez Limited Company**

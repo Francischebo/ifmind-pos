@@ -1,7 +1,12 @@
-# AUDIT_REPORT.md
+# AUDIT_REPORT.md (ARCHIVED & OUTDATED)
+
+> [!WARNING]
+> **HISTORICAL ARCHIVE NOTICE**
+> This audit report was produced on 2026-09-30 during the initial prototype phase. It is **OUTDATED** and retained strictly for historical reference.
+> All major security findings, architectural gaps, and workflow defects identified herein were resolved during the production-hardening program (Phases 0 through 7). For current system status, see `docs/PRODUCTION_READINESS.md`.
 
 **Repository:** `Retail-store-pos-system-main` (retail/POS + inventory + procurement + accounting)
-**Audit type:** Read-only, static, evidence-based source review
+**Audit type:** Read-only, static, evidence-based source review (Historical)
 **Date:** 2026-09-30
 **Branch / HEAD:** `main` @ `daab68a` ("appended all the missing migrations")
 **Auditor scope:** Whole repository, Phases 1–5

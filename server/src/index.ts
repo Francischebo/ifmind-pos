@@ -179,7 +179,9 @@ app.use(helmet({
             scriptSrc: ["'self'"],
             styleSrc: ["'self'", "'unsafe-inline'"],
             imgSrc: ["'self'", "data:", "blob:"],
-            connectSrc: ["'self'", "https:", "wss:", "http://localhost:3000", "ws://localhost:3000", "http://127.0.0.1:3000", "ws://127.0.0.1:3000"],
+            connectSrc: process.env.NODE_ENV === "production"
+                ? ["'self'", "https:", "wss:"]
+                : ["'self'", "https:", "wss:", "http://localhost:3000", "ws://localhost:3000", "http://127.0.0.1:3000", "ws://127.0.0.1:3000"],
             fontSrc: ["'self'", "data:"],
             objectSrc: ["'none'"],
             frameAncestors: ["'none'"],
@@ -361,7 +363,7 @@ app.get("/api/health", livenessHandler);
 app.get("/ready", readinessHandler);
 app.get("/api/ready", readinessHandler);
 app.get("/", (_req, res) => {
-    res.json({ status: "cfi-POS Techiez Limited API is running smoothly", version: "1.0.0" });
+    res.json({ status: "cfi-POS Techiez Limited Company API is running smoothly", version: "1.0.0" });
 });
 app.get("/favicon.ico", (_req, res) => res.status(204).end());
 
@@ -419,9 +421,6 @@ app.get("/api/returns", authenticateJWT, requireRoles(["cashier", "supervisor", 
 app.post("/api/admin/returns/approve/:id", authenticateJWT, requireRoles(["supervisor", "manager", "admin"]), ReturnController.approveReturn);
 app.post("/api/admin/returns/:id/mpesa-payout", authenticateJWT, requireRoles(["supervisor", "manager", "admin"]), ReturnController.confirmMpesaRefundPayout);
 app.post("/api/admin/returns/reject/:id", authenticateJWT, requireRoles(["supervisor", "manager", "admin"]), ReturnController.rejectReturn);
-app.post("/admin/returns/approve/:id", authenticateJWT, requireRoles(["supervisor", "manager", "admin"]), ReturnController.approveReturn);
-app.post("/admin/returns/:id/mpesa-payout", authenticateJWT, requireRoles(["supervisor", "manager", "admin"]), ReturnController.confirmMpesaRefundPayout);
-app.post("/admin/returns/reject/:id", authenticateJWT, requireRoles(["supervisor", "manager", "admin"]), ReturnController.rejectReturn);
 
 // Customer Routes
 app.get("/api/customers", authenticateJWT, CustomerController.getAllCustomers);

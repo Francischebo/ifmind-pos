@@ -17,4 +17,4 @@ Disallow: /auth
 Disallow: /admin
 
 # Sitemap
-Sitemap: https://molabs-pos.com/sitemap.xml
+Sitemap: https://cfi-pos.techiez.co.ke/sitemap.xml

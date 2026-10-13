@@ -79,8 +79,8 @@ const run = async () => {
             );
 
             const encryptionMigrationPath = path.resolve(
-                process.cwd(),
-                "../supabase/migrations/20261001000000_require_encryption_key_setting.sql"
+                __dirname,
+                "../test-fixtures/require_encryption_key_setting.sql"
             );
             await migrationClient.query(readFileSync(encryptionMigrationPath, "utf8"));
 
@@ -115,8 +115,8 @@ const run = async () => {
             `);
 
             const rpcPrivilegeMigrationPath = path.resolve(
-                process.cwd(),
-                "../supabase/migrations/20261005204500_restrict_secure_sale_rpc.sql"
+                __dirname,
+                "../test-fixtures/restrict_secure_sale_rpc.sql"
             );
             const rpcPrivilegeMigration = readFileSync(rpcPrivilegeMigrationPath, "utf8");
             await migrationClient.query(rpcPrivilegeMigration);

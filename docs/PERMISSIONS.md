@@ -58,9 +58,6 @@ This table documents every route defined in `server/src/index.ts`, its HTTP meth
 | **POST** | `/api/admin/returns/approve/:id` | `authenticateJWT, requireRoles(["supervisor", "manager", "admin"])` | `supervisor`, `manager`, `admin` | `supervisor`, `manager`, `admin` | Approve return |
 | **POST** | `/api/admin/returns/:id/mpesa-payout` | `authenticateJWT, requireRoles(["supervisor", "manager", "admin"])` | `supervisor`, `manager`, `admin` | `supervisor`, `manager`, `admin` | Issue M-Pesa refund |
 | **POST** | `/api/admin/returns/reject/:id` | `authenticateJWT, requireRoles(["supervisor", "manager", "admin"])` | `supervisor`, `manager`, `admin` | `supervisor`, `manager`, `admin` | Reject return |
-| **POST** | `/admin/returns/approve/:id` | `authenticateJWT, requireRoles(["supervisor", "manager", "admin"])` | `supervisor`, `manager`, `admin` | Deprecated (Phase 7 remove) | Duplicate non-API route |
-| **POST** | `/admin/returns/:id/mpesa-payout` | `authenticateJWT, requireRoles(["supervisor", "manager", "admin"])` | `supervisor`, `manager`, `admin` | Deprecated (Phase 7 remove) | Duplicate non-API route |
-| **POST** | `/admin/returns/reject/:id` | `authenticateJWT, requireRoles(["supervisor", "manager", "admin"])` | `supervisor`, `manager`, `admin` | Deprecated (Phase 7 remove) | Duplicate non-API route |
 | **GET** | `/api/customers` | `authenticateJWT` | Any authenticated user | Any authenticated user | Cashier needs to search customer |
 | **GET** | `/api/customers/:id` | `authenticateJWT` | Any authenticated user | Any authenticated user | Customer profile |
 | **POST** | `/api/customers` | `authenticateJWT` | Any authenticated user | Any authenticated user | Cashier may register customer at till |

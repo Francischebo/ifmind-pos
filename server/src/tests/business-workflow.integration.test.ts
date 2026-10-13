@@ -1282,7 +1282,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             costChangedProduct.unit_cost = 25;
             await AppDataSource.getRepository(Product).save(costChangedProduct);
             discountedReturnApproval = await fetch(
-                `http://127.0.0.1:${port}/admin/returns/approve/${discountedReturn.id}`,
+                `http://127.0.0.1:/api/admin/returns/approve/${discountedReturn.id}`,
                 {
                     method: "POST",
                     headers: { ...tokenHeader, "Content-Type": "application/json" },
@@ -1320,7 +1320,7 @@ test("admin can access protected product workflow and reject unauthorized reques
         const secondDiscountedReturn = (await secondDiscountedReturnResponse.json() as IntegrationApiObject).request;
         createdSecondDiscountedReturnRequestId = secondDiscountedReturn.id;
         const secondDiscountedReturnApproval = await fetch(
-            `http://127.0.0.1:${port}/admin/returns/approve/${secondDiscountedReturn.id}`,
+            `http://127.0.0.1:/api/admin/returns/approve/${secondDiscountedReturn.id}`,
             {
                 method: "POST",
                 headers: { ...tokenHeader, "Content-Type": "application/json" },
@@ -1417,7 +1417,7 @@ test("admin can access protected product workflow and reject unauthorized reques
                 if (index === 0) createdFirstTaxRoundingReturnId = returnRequest.id;
                 else createdSecondTaxRoundingReturnId = returnRequest.id;
                 const approvalResponse = await fetch(
-                    `http://127.0.0.1:${port}/admin/returns/approve/${returnRequest.id}`,
+                    `http://127.0.0.1:/api/admin/returns/approve/${returnRequest.id}`,
                     {
                         method: "POST",
                         headers: { ...tokenHeader, "Content-Type": "application/json" },
@@ -1517,7 +1517,7 @@ test("admin can access protected product workflow and reject unauthorized reques
         };
         try {
             signingFailureResponse = await fetch(
-                `http://127.0.0.1:${port}/admin/returns/approve/${etimsFailureReturn.id}`,
+                `http://127.0.0.1:/api/admin/returns/approve/${etimsFailureReturn.id}`,
                 {
                     method: "POST",
                     headers: { ...tokenHeader, "Content-Type": "application/json" },
@@ -1630,12 +1630,12 @@ test("admin can access protected product workflow and reject unauthorized reques
 
         const stockBeforeDecisionRace = await productRepository.findOneByOrFail({ id: createdProduct.id });
         const decisionRaceResponses = await Promise.all([
-            fetch(`http://127.0.0.1:${port}/admin/returns/approve/${noShiftCashReturn.id}`, {
+            fetch(`http://127.0.0.1:/api/admin/returns/approve/${noShiftCashReturn.id}`, {
                 method: "POST",
                 headers: { ...tokenHeader, "Content-Type": "application/json" },
                 body: JSON.stringify({ refund_method: "store_credit" }),
             }),
-            fetch(`http://127.0.0.1:${port}/admin/returns/reject/${noShiftCashReturn.id}`, {
+            fetch(`http://127.0.0.1:/api/admin/returns/reject/${noShiftCashReturn.id}`, {
                 method: "POST",
                 headers: { ...tokenHeader, "Content-Type": "application/json" },
                 body: JSON.stringify({ rejection_reason: "Concurrent decision test" }),
@@ -1873,7 +1873,7 @@ test("admin can access protected product workflow and reject unauthorized reques
         const returnRequestBody = (await returnRequestResponse.json()) as IntegrationApiObject;
         createdReturnRequestId = returnRequestBody.request.id;
 
-        const approvalResponse = await fetch(`http://127.0.0.1:${port}/admin/returns/approve/${createdReturnRequestId}`, {
+        const approvalResponse = await fetch(`http://127.0.0.1:/api/admin/returns/approve/${createdReturnRequestId}`, {
             method: "POST",
             headers: { ...tokenHeader, "Content-Type": "application/json" },
             body: JSON.stringify({ refund_method: "store_credit" }),
@@ -1943,7 +1943,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             where: { id: createdExchangeReturnRequestId },
             relations: ["items"],
         });
-        const exchangeApprovalResponse = await fetch(`http://127.0.0.1:${port}/admin/returns/approve/${createdExchangeReturnRequestId}`, {
+        const exchangeApprovalResponse = await fetch(`http://127.0.0.1:/api/admin/returns/approve/${createdExchangeReturnRequestId}`, {
             method: "POST",
             headers: { ...tokenHeader, "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -2506,7 +2506,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             id: openedShift.id,
         });
         const concurrentApprovals = await Promise.all([1, 2].map(() =>
-            fetch(`http://127.0.0.1:${port}/admin/returns/approve/${createdMpesaReturnRequestId}`, {
+            fetch(`http://127.0.0.1:/api/admin/returns/approve/${createdMpesaReturnRequestId}`, {
                 method: "POST",
                 headers: { ...tokenHeader, "Content-Type": "application/json" },
                 body: JSON.stringify({ refund_method: "mpesa" }),
@@ -2544,7 +2544,7 @@ test("admin can access protected product workflow and reject unauthorized reques
         );
 
         const mpesaRefundReceipt = `RFD${randomUUID().replace(/-/g, "").slice(0, 10).toUpperCase()}`;
-        const mpesaPayoutConfirmationUrl = `http://127.0.0.1:${port}/admin/returns/${createdMpesaReturnRequestId}/mpesa-payout`;
+        const mpesaPayoutConfirmationUrl = `http://127.0.0.1:/api/admin/returns/${createdMpesaReturnRequestId}/mpesa-payout`;
         const mpesaPayoutConfirmationResponse = await fetch(mpesaPayoutConfirmationUrl, {
             method: "POST",
             headers: { ...tokenHeader, "Content-Type": "application/json" },
