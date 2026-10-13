@@ -42,6 +42,9 @@ export class MpesaTransaction {
     @Column({ type: "text", nullable: true })
     result_desc: string | null;
 
+    @Column({ type: "text", nullable: true })
+    mismatch_reason: string | null;
+
     @Column({ type: "varchar", nullable: true })
     checkout_request_id: string | null;
 

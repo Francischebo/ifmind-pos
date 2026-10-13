@@ -284,6 +284,7 @@ export default function Sales() {
         mpesa_receipt_number: string | null;
         checkout_request_id: string | null;
         account_reference: string | null;
+        mismatch_reason?: string | null;
       }>;
       total_amount: number;
       cash_amount: number;

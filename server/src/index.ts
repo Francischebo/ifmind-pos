@@ -482,6 +482,10 @@ app.post("/api/webhooks/mpesa/c2b/confirmation", PaymentController.mpesaC2bConfi
 app.post("/api/webhooks/pesapal/ipn", PaymentController.pesapalWebhook);
 app.get("/api/webhooks/pesapal/ipn", PaymentController.pesapalWebhook);
 
+// Admin M-Pesa reconciliation and review
+app.get("/api/admin/mpesa/unresolved", authenticateJWT, requireRole("admin"), PaymentController.getUnresolvedMpesaTransactions);
+app.post("/api/admin/mpesa/:id/resolve", authenticateJWT, requireRole("admin"), PaymentController.resolveMpesaTransaction);
+
 // Sample protected route
 app.get("/api/admin-only", authenticateJWT, requireRole("admin"), (req, res) => {
     res.json({ message: "Welcome Admin!" });

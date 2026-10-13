@@ -155,6 +155,7 @@ const { EnforceOneOpenShiftPerCashier1791050000000 } = loadModule("../migration/
 const { AddSaleItemUnitCostSnapshot1791060000000 } = loadModule("../migration/1791060000000-AddSaleItemUnitCostSnapshot") as typeof import("../migration/1791060000000-AddSaleItemUnitCostSnapshot");
 const { AllowParkedSales1791070000000 } = loadModule("../migration/1791070000000-AllowParkedSales") as typeof import("../migration/1791070000000-AllowParkedSales");
 const { CreateCustomerInvoices1791080000000 } = loadModule("../migration/1791080000000-CreateCustomerInvoices") as typeof import("../migration/1791080000000-CreateCustomerInvoices");
+const { AddMpesaMismatchHandling1791120000000 } = loadModule("../migration/1791120000000-AddMpesaMismatchHandling") as typeof import("../migration/1791120000000-AddMpesaMismatchHandling");
 const { EmailService } = loadModule("../services/EmailService") as typeof import("../services/EmailService");
 const originalSendOtpEmail = EmailService.sendOtpEmail;
 
@@ -4491,6 +4492,60 @@ test("parked-sale migration permits the parked status in the database", async ()
             assert.ok(enumValues.some((value: { enumlabel: string }) => value.enumlabel === "parked"));
         }
     } finally {
+        await queryRunner.release();
+    }
+});
+
+test("mpesa mismatch handling migration creates mismatch_reason column and status index idempotently", async () => {
+    const queryRunner = AppDataSource.createQueryRunner();
+    const schemaName = `mpesa_mismatch_migration_${randomUUID().replace(/-/g, "")}`;
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+        await queryRunner.query(`CREATE SCHEMA "${schemaName}"`);
+        await queryRunner.query(`SET LOCAL search_path TO "${schemaName}"`);
+        await queryRunner.query(`CREATE TABLE "mpesa_transactions" (
+            "id" uuid PRIMARY KEY,
+            "status" varchar NOT NULL DEFAULT 'pending',
+            "amount" numeric(10,2) NOT NULL
+        )`);
+
+        const migration = new AddMpesaMismatchHandling1791120000000();
+        await migration.up(queryRunner);
+        await migration.up(queryRunner);
+
+        const columns = await queryRunner.query(`
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = $1
+              AND table_name = 'mpesa_transactions'
+              AND column_name = 'mismatch_reason'
+        `, [schemaName]);
+        assert.equal(columns.length, 1);
+
+        const indexes = await queryRunner.query(`
+            SELECT indexname
+            FROM pg_indexes
+            WHERE schemaname = $1
+              AND indexname = 'IDX_mpesa_transactions_status'
+        `, [schemaName]);
+        assert.equal(indexes.length, 1);
+
+        await migration.down(queryRunner);
+
+        const remainingColumns = await queryRunner.query(`
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = $1
+              AND table_name = 'mpesa_transactions'
+              AND column_name = 'mismatch_reason'
+        `, [schemaName]);
+        assert.equal(remainingColumns.length, 0);
+    } finally {
+        if (queryRunner.isTransactionActive) {
+            await queryRunner.rollbackTransaction();
+        }
         await queryRunner.release();
     }
 });

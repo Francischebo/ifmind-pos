@@ -759,13 +759,12 @@ export class PaymentController {
                 await queryRunner.rollbackTransaction();
                 return res.json({ ResultCode: 0, ResultDesc: "Accepted" });
             }
-            if (transaction.status !== "pending" ||
-                Math.round(Number(transaction.amount) * 100) !== callback.amountCents ||
-                transaction.phone_number !== callback.phoneNumber) {
+            if (transaction.status !== "pending" && transaction.status !== "needs_review") {
                 await queryRunner.rollbackTransaction();
                 console.warn("Rejected mismatched Paybill callback:", callback.accountReference, callback.transactionCode);
                 return res.status(400).json({ ResultCode: 1, ResultDesc: "Payment details do not match the pending checkout" });
             }
+
             const duplicateReceipt = await queryRunner.manager.findOneBy(MpesaTransaction, {
                 mpesa_receipt_number: callback.transactionCode,
             });
@@ -774,7 +773,28 @@ export class PaymentController {
                 return res.status(409).json({ ResultCode: 1, ResultDesc: "M-Pesa receipt was already processed" });
             }
 
+            const mismatchReasons: string[] = [];
+            if (Math.round(Number(transaction.amount) * 100) !== callback.amountCents) {
+                mismatchReasons.push(`Amount mismatch: expected KES ${transaction.amount}, received KES ${callback.amountCents / 100}`);
+            }
+            if (transaction.phone_number !== callback.phoneNumber) {
+                mismatchReasons.push(`Phone mismatch: expected ${transaction.phone_number}, received ${callback.phoneNumber}`);
+            }
+
+            if (mismatchReasons.length > 0) {
+                transaction.status = "needs_review";
+                transaction.mismatch_reason = mismatchReasons.join("; ");
+                transaction.mpesa_receipt_number = callback.transactionCode;
+                transaction.result_desc = "Paybill C2B confirmed with discrepancies";
+                transaction.callback_data = req.body as Record<string, unknown>;
+                await queryRunner.manager.save(transaction);
+                await queryRunner.commitTransaction();
+                console.warn(`[MPESA C2B MISMATCH] Transaction ${transaction.transaction_code} flagged as needs_review: ${transaction.mismatch_reason}`);
+                return res.status(400).json({ ResultCode: 1, ResultDesc: "Payment details do not match the pending checkout" });
+            }
+
             transaction.status = "completed";
+            transaction.mismatch_reason = null;
             transaction.mpesa_receipt_number = callback.transactionCode;
             transaction.phone_number = callback.phoneNumber;
             transaction.callback_received = true;
@@ -853,7 +873,7 @@ export class PaymentController {
                 return res.status(400).json({ ResultCode: 1, ResultDesc: "Invalid callback result" });
             }
 
-            if (transaction.callback_received) {
+            if (transaction.callback_received || transaction.status === "completed") {
                 let duplicateMatches = false;
                 if (transaction.status === "completed" && resultCode === 0) {
                     const metadata = stkCallback.CallbackMetadata?.Item || [];
@@ -861,6 +881,14 @@ export class PaymentController {
                     const callbackAmount = Number(metadata.find((item) => item.Name === "Amount")?.Value);
                     const callbackPhone = metadata.find((item) => item.Name === "PhoneNumber")?.Value;
                     const normalizedPhone = normalizeMpesaPhone(callbackPhone);
+                    if (typeof receipt === "string" && receipt.trim() && transaction.mpesa_receipt_number?.startsWith("RECON_")) {
+                        transaction.mpesa_receipt_number = receipt.trim();
+                        transaction.callback_received = true;
+                        transaction.callback_data = callback;
+                        await queryRunner.manager.save(transaction);
+                        await queryRunner.commitTransaction();
+                        return res.status(200).json({ ResultCode: 0, ResultDesc: "Accepted" });
+                    }
                     duplicateMatches = String(receipt) === transaction.mpesa_receipt_number &&
                         Number.isFinite(callbackAmount) &&
                         Math.round(callbackAmount * 100) === Math.round(Number(transaction.amount) * 100) &&
@@ -874,10 +902,10 @@ export class PaymentController {
                     : res.status(409).json({ ResultCode: 1, ResultDesc: "Conflicting duplicate callback" });
             }
 
-            transaction.callback_received = true;
             transaction.callback_data = callback;
             transaction.result_desc = typeof stkCallback.ResultDesc === "string" ? stkCallback.ResultDesc : null;
             if (resultCode !== 0) {
+                transaction.callback_received = true;
                 transaction.status = "failed";
                 await queryRunner.manager.save(transaction);
                 await queryRunner.commitTransaction();
@@ -890,24 +918,42 @@ export class PaymentController {
             const callbackPhone = metadata.find((item) => item.Name === "PhoneNumber")?.Value;
             const parsedCallbackAmount = Number(callbackAmount);
             const normalizedCallbackPhone = normalizeMpesaPhone(callbackPhone);
-            if (typeof receipt !== "string" || !receipt.trim() ||
-                !normalizedCallbackPhone ||
-                !Number.isSafeInteger(parsedCallbackAmount) || parsedCallbackAmount <= 0 ||
-                parsedCallbackAmount !== Number(transaction.amount) ||
-                normalizedCallbackPhone !== transaction.phone_number) {
+
+            if (typeof receipt !== "string" || !receipt.trim()) {
                 await queryRunner.rollbackTransaction();
-                return res.status(400).json({ ResultCode: 1, ResultDesc: "Callback amount, phone, or receipt is invalid" });
+                return res.status(400).json({ ResultCode: 1, ResultDesc: "Callback receipt is invalid" });
             }
 
             const duplicateReceipt = await queryRunner.manager.findOne(MpesaTransaction, {
-                where: { mpesa_receipt_number: String(receipt) },
+                where: { mpesa_receipt_number: String(receipt).trim() },
             });
             if (duplicateReceipt && duplicateReceipt.id !== transaction.id) {
                 await queryRunner.rollbackTransaction();
                 return res.status(409).json({ ResultCode: 1, ResultDesc: "M-Pesa receipt was already processed" });
             }
 
+            const mismatchReasons: string[] = [];
+            if (!Number.isSafeInteger(parsedCallbackAmount) || parsedCallbackAmount <= 0 ||
+                parsedCallbackAmount !== Number(transaction.amount)) {
+                mismatchReasons.push(`Amount mismatch: expected KES ${transaction.amount}, received KES ${parsedCallbackAmount}`);
+            }
+            if (!normalizedCallbackPhone || normalizedCallbackPhone !== transaction.phone_number) {
+                mismatchReasons.push(`Phone mismatch: expected ${transaction.phone_number}, received ${normalizedCallbackPhone || callbackPhone}`);
+            }
+
+            if (mismatchReasons.length > 0) {
+                transaction.status = "needs_review";
+                transaction.mismatch_reason = mismatchReasons.join("; ");
+                transaction.mpesa_receipt_number = receipt.trim();
+                await queryRunner.manager.save(transaction);
+                await queryRunner.commitTransaction();
+                console.warn(`[MPESA STK MISMATCH] Transaction ${transaction.transaction_code} flagged as needs_review: ${transaction.mismatch_reason}`);
+                return res.status(400).json({ ResultCode: 1, ResultDesc: "Callback amount, phone, or receipt is invalid" });
+            }
+
             transaction.status = "completed";
+            transaction.mismatch_reason = null;
+            transaction.callback_received = true;
             transaction.mpesa_receipt_number = receipt.trim();
             transaction.amount = parsedCallbackAmount;
             await queryRunner.manager.save(transaction);
@@ -969,6 +1015,7 @@ export class PaymentController {
                 status: transaction.status,
                 amount: Number(transaction.amount),
                 result_desc: transaction.result_desc,
+                mismatch_reason: transaction.mismatch_reason,
                 mpesa_receipt_number: transaction.mpesa_receipt_number,
                 checkout_request_id: transaction.checkout_request_id,
                 phone_number: transaction.phone_number,
@@ -1002,6 +1049,7 @@ export class PaymentController {
                 status: latestTransaction.status,
                 amount: Number(latestTransaction.amount),
                 result_desc: latestTransaction.result_desc,
+                mismatch_reason: latestTransaction.mismatch_reason,
                 mpesa_receipt_number: latestTransaction.mpesa_receipt_number,
                 checkout_request_id: latestTransaction.checkout_request_id,
                 phone_number: latestTransaction.phone_number,
@@ -1115,6 +1163,112 @@ export class PaymentController {
         } catch (error) {
             console.error("Error processing Pesapal webhook:", error);
             return res.status(500).json({ message: "Error processing Pesapal webhook" });
+        }
+    }
+
+    static async getUnresolvedMpesaTransactions(req: AuthenticatedRequest, res: Response) {
+        try {
+            const statusFilter = typeof req.query.status === "string" ? req.query.status.trim() : null;
+            const whereClause = statusFilter
+                ? { status: statusFilter }
+                : [{ status: "needs_review" }, { status: "pending" }];
+
+            const transactions = await AppDataSource.getRepository(MpesaTransaction).find({
+                where: whereClause,
+                order: { created_at: "DESC" },
+                take: 100,
+            });
+
+            return res.json({
+                count: transactions.length,
+                transactions: transactions.map((tx) => ({
+                    id: tx.id,
+                    transaction_code: tx.transaction_code,
+                    status: tx.status,
+                    amount: Number(tx.amount),
+                    phone_number: tx.phone_number,
+                    mpesa_receipt_number: tx.mpesa_receipt_number,
+                    checkout_request_id: tx.checkout_request_id,
+                    checkout_session_id: tx.checkout_session_id,
+                    sale_id: tx.sale_id,
+                    mismatch_reason: tx.mismatch_reason,
+                    result_desc: tx.result_desc,
+                    account_reference: tx.account_reference,
+                    created_at: tx.created_at,
+                    updated_at: tx.updated_at,
+                })),
+            });
+        } catch (error) {
+            console.error("Failed to fetch unresolved M-Pesa transactions:", error);
+            return res.status(500).json({ message: "Failed to fetch unresolved M-Pesa transactions" });
+        }
+    }
+
+    static async resolveMpesaTransaction(req: AuthenticatedRequest, res: Response) {
+        const queryRunner = AppDataSource.createQueryRunner();
+        await queryRunner.connect();
+        await queryRunner.startTransaction();
+        try {
+            const transactionId = String(req.params.id || "");
+            const { action, notes } = req.body || {};
+
+            if (!["mark_completed", "mark_failed"].includes(action)) {
+                await queryRunner.rollbackTransaction();
+                return res.status(400).json({ message: "Action must be mark_completed or mark_failed" });
+            }
+
+            const transaction = await queryRunner.manager.findOne(MpesaTransaction, {
+                where: { id: transactionId },
+                lock: { mode: "pessimistic_write" },
+            });
+
+            if (!transaction) {
+                await queryRunner.rollbackTransaction();
+                return res.status(404).json({ message: "M-Pesa transaction not found" });
+            }
+
+            if (transaction.status !== "needs_review" && transaction.status !== "pending") {
+                await queryRunner.rollbackTransaction();
+                return res.status(409).json({ message: `Cannot resolve transaction with status ${transaction.status}` });
+            }
+
+            if (action === "mark_completed") {
+                transaction.status = "completed";
+                transaction.result_desc = notes ? `Admin resolved: ${notes}` : "Admin marked as completed";
+
+                if (transaction.sale_id) {
+                    const sale = await queryRunner.manager.findOne(Sale, {
+                        where: { id: transaction.sale_id },
+                        lock: { mode: "pessimistic_write" },
+                    });
+                    if (sale) {
+                        sale.mpesa_amount = Number(sale.mpesa_amount || 0) + Number(transaction.amount);
+                        const totalPaid = Number(sale.cash_amount || 0) + sale.mpesa_amount + Number(sale.store_credit_amount || 0);
+                        sale.change_amount = Math.max(0, totalPaid - Number(sale.total_amount));
+                        sale.payment_status = totalPaid >= Number(sale.total_amount) ? "paid" : "partially_paid";
+                        await queryRunner.manager.save(sale);
+
+                        await AccountingService.recordMpesaReceivablePayment(
+                            queryRunner.manager,
+                            sale.id,
+                            Number(transaction.amount),
+                        );
+                    }
+                }
+            } else {
+                transaction.status = "failed";
+                transaction.result_desc = notes ? `Admin rejected: ${notes}` : "Admin marked as failed";
+            }
+
+            await queryRunner.manager.save(transaction);
+            await queryRunner.commitTransaction();
+            return res.json({ success: true, transaction });
+        } catch (error) {
+            await queryRunner.rollbackTransaction();
+            console.error("M-Pesa transaction resolution error:", error);
+            return res.status(500).json({ message: "Failed to resolve M-Pesa transaction" });
+        } finally {
+            await queryRunner.release();
         }
     }
 }

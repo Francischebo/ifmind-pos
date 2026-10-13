@@ -7,14 +7,20 @@ import { Sale, EtimsStatus } from "../entity/Sale";
 import { CreditNote } from "../entity/CreditNote";
 import { EtimsService } from "./etims/EtimsService";
 
+import { MpesaService, MPESA_RECONCILE_LOCK_ID } from "./MpesaService";
+import { expireAbandonedCheckoutReservations, RESERVATION_EXPIRY_LOCK_ID } from "./CheckoutReservationService";
+
 export const AUTO_REORDER_LOCK_ID = 71943001;
 export const ETIMS_RETRY_LOCK_ID = 71943002;
+export { MPESA_RECONCILE_LOCK_ID, RESERVATION_EXPIRY_LOCK_ID };
 
 const ETIMS_BACKOFF_MINUTES = [1, 5, 15, 30, 60];
 
 export class CronService {
     private static autoReorderTask: ReturnType<typeof cron.schedule> | null = null;
     private static etimsRetryTask: ReturnType<typeof cron.schedule> | null = null;
+    private static mpesaReconcileTask: ReturnType<typeof cron.schedule> | null = null;
+    private static reservationExpiryTask: ReturnType<typeof cron.schedule> | null = null;
 
     static init() {
         if (!this.autoReorderTask) {
@@ -33,6 +39,22 @@ export class CronService {
             });
         }
 
+        if (!this.mpesaReconcileTask) {
+            // Run every 2 minutes: '*/2 * * * *'
+            this.mpesaReconcileTask = cron.schedule('*/2 * * * *', async () => {
+                console.log("Running M-Pesa Pending Reconciliation Cron Job...");
+                await this.reconcilePendingMpesaTransactions();
+            });
+        }
+
+        if (!this.reservationExpiryTask) {
+            // Run every 5 minutes: '*/5 * * * *'
+            this.reservationExpiryTask = cron.schedule('*/5 * * * *', async () => {
+                console.log("Running Checkout Reservation Expiry Cron Job...");
+                await this.expireAbandonedCheckoutReservations();
+            });
+        }
+
         console.log("CronService initialized.");
     }
 
@@ -41,6 +63,21 @@ export class CronService {
         this.autoReorderTask = null;
         this.etimsRetryTask?.stop();
         this.etimsRetryTask = null;
+        this.mpesaReconcileTask?.stop();
+        this.mpesaReconcileTask = null;
+        this.reservationExpiryTask?.stop();
+        this.reservationExpiryTask = null;
+    }
+
+    public static async reconcilePendingMpesaTransactions(options?: {
+        queryTimeoutMinutes?: number;
+        maxAgeMinutes?: number;
+    }) {
+        return MpesaService.reconcilePendingTransactions(options);
+    }
+
+    public static async expireAbandonedCheckoutReservations(ttlMinutes?: number) {
+        return expireAbandonedCheckoutReservations(ttlMinutes);
     }
 
     private static async generateAutoRequisitions() {

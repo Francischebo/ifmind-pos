@@ -225,6 +225,7 @@ export class CheckoutController {
                     mpesa_receipt_number: transaction.mpesa_receipt_number,
                     checkout_request_id: transaction.checkout_request_id,
                     account_reference: transaction.account_reference,
+                    mismatch_reason: transaction.mismatch_reason,
                 })),
             });
         } catch (error) {

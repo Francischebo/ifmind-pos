@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node --require ts-node/register --test src/controllers/PaymentController.test.ts src/data-source.test.ts src/services/etims/EtimsService.test.ts src/middleware/auth.test.ts",
+    "test": "node --require ts-node/register --test src/controllers/PaymentController.test.ts src/data-source.test.ts src/services/etims/EtimsService.test.ts src/middleware/auth.test.ts src/services/MpesaService.test.ts",
     "test:integration": "node scripts/run-integration.cjs",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",

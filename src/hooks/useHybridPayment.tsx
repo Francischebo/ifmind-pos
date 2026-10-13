@@ -37,6 +37,7 @@ interface MpesaTransaction {
   status: string;
   amount: number;
   result_desc?: string | null;
+  mismatch_reason?: string | null;
   mpesa_receipt_number: string | null;
   checkout_request_id: string | null;
   account_reference: string | null;
