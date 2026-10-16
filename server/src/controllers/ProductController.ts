@@ -15,6 +15,7 @@ import { Setting } from "../entity/Setting";
 const productRepository = AppDataSource.getRepository(Product);
 const categoryRepository = AppDataSource.getRepository(Category);
 const taxClassRepository = AppDataSource.getRepository(TaxClass);
+const warehouseRepository = AppDataSource.getRepository(Warehouse);
 const warehouseStockRepository = AppDataSource.getRepository(WarehouseStock);
 
 class ProductInventoryValidationError extends Error {}
@@ -760,30 +761,42 @@ export class ProductController {
 
     static async getAllProducts(req: Request, res: Response) {
         try {
-            const { warehouse_id } = req.query;
-            let products = await productRepository.find({ relations: ["category", "tax_class", "parent"] });
-
-            if (warehouse_id) {
-                const stocks = await warehouseStockRepository.find({
-                    where: { warehouse_id: warehouse_id as string }
+            const warehouseId = req.query.warehouse_id;
+            if (warehouseId !== undefined) {
+                if (
+                    typeof warehouseId !== "string" ||
+                    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(warehouseId.trim())
+                ) {
+                    return res.status(400).json({ message: "warehouse_id must be a single warehouse ID" });
+                }
+                const warehouse = await warehouseRepository.findOne({
+                    where: { id: warehouseId.trim(), is_active: true },
+                    select: ["id"],
                 });
-                
-                // Map stocks by product_id
-                const stockMap = new Map(stocks.map(s => [s.product_id, s.stock_on_hand]));
-                
-                products = products.map(p => ({
-                    ...p,
-                    stock_on_hand: stockMap.get(p.id) || 0
-                }));
-            } else {
-                const totalsByProduct = await InventoryService.getTotalStockByProduct(AppDataSource.manager);
-                products = products.map((product) => ({
+                if (!warehouse) {
+                    return res.status(400).json({ message: "Warehouse not found or inactive" });
+                }
+                const [products, stocks] = await Promise.all([
+                    productRepository.find({ relations: ["category", "tax_class", "parent"] }),
+                    warehouseStockRepository.find({ where: { warehouse_id: warehouse.id } }),
+                ]);
+                const stockByProduct = new Map(
+                    stocks.map((stock) => [stock.product_id, Number(stock.stock_on_hand)]),
+                );
+                return res.json(products.map((product) => ({
                     ...product,
-                    stock_on_hand: InventoryService.getTotalStockOnHand(product, totalsByProduct),
-                }));
+                    stock_on_hand: stockByProduct.get(product.id) ?? 0,
+                })));
             }
 
-            res.json(products);
+            const [products, totalsByProduct] = await Promise.all([
+                productRepository.find({ relations: ["category", "tax_class", "parent"] }),
+                InventoryService.getTotalStockByProduct(AppDataSource.manager),
+            ]);
+            return res.json(products.map((product) => ({
+                ...product,
+                stock_on_hand: InventoryService.getTotalStockOnHand(product, totalsByProduct),
+            })));
         } catch (error) {
             console.error(error);
             res.status(500).json({ message: "Error fetching products" });

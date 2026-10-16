@@ -29,6 +29,13 @@ import {
   notifyCompanyBrandingUpdated,
   resolveCompanyLogoUrl,
 } from "@/hooks/useCompanyBranding";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 interface TaxClass {
   id: string;
@@ -272,6 +279,19 @@ export default function Settings() {
   const handleSave = async () => {
     if (role !== "admin") {
       toast.error("Only admins can update settings");
+      return;
+    }
+
+    const stkAccountType = settings.mpesa_stk_account_type === "paybill" ? "paybill" : "till";
+    const stkNumber = stkAccountType === "paybill"
+      ? settings.mpesa_paybill?.trim() || ""
+      : settings.mpesa_shortcode?.trim() || settings.mpesa_till_number?.trim() || "";
+    if (stkNumber && !/^\d{5,7}$/.test(stkNumber)) {
+      toast.error("The M-Pesa STK Till or Paybill number must contain 5 to 7 digits.");
+      return;
+    }
+    if (settings.mpesa_paybill?.trim() && !/^\d{5,7}$/.test(settings.mpesa_paybill.trim())) {
+      toast.error("The Paybill number must contain 5 to 7 digits.");
       return;
     }
 
@@ -659,18 +679,50 @@ export default function Settings() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div>
-              <Label htmlFor="mpesa_shortcode">Till Number / Shortcode *</Label>
+              <Label htmlFor="mpesa_stk_account_type">STK Push account type *</Label>
+              <Select
+                value={settings.mpesa_stk_account_type === "paybill" ? "paybill" : "till"}
+                onValueChange={(value) => updateSetting("mpesa_stk_account_type", value)}
+                disabled={role !== "admin"}
+              >
+                <SelectTrigger id="mpesa_stk_account_type">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="till">Till (Buy Goods)</SelectItem>
+                  <SelectItem value="paybill">Paybill</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground mt-1">
+                Select the type of business number that will receive STK Push payments.
+              </p>
+            </div>
+            <div>
+              <Label htmlFor="mpesa_shortcode">
+                {settings.mpesa_stk_account_type === "paybill"
+                  ? "Paybill Number for STK Push *"
+                  : "Till Number for STK Push *"}
+              </Label>
               <Input
                 id="mpesa_shortcode"
-                value={settings.mpesa_shortcode || settings.mpesa_till_number || ""}
-                onChange={(e) =>
-                  updateSetting("mpesa_shortcode", e.target.value)
-                }
-                placeholder="Enter your M-Pesa Till Number (e.g., 174379)"
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]{5,7}"
+                maxLength={7}
+                value={settings.mpesa_stk_account_type === "paybill"
+                  ? settings.mpesa_paybill || ""
+                  : settings.mpesa_shortcode || settings.mpesa_till_number || ""}
+                onChange={(e) => updateSetting(
+                  settings.mpesa_stk_account_type === "paybill" ? "mpesa_paybill" : "mpesa_shortcode",
+                  e.target.value,
+                )}
+                placeholder={settings.mpesa_stk_account_type === "paybill"
+                  ? "Enter your M-Pesa Paybill number"
+                  : "Enter your M-Pesa Till number"}
                 disabled={role !== "admin"}
               />
               <p className="text-xs text-muted-foreground mt-1">
-                This is your M-Pesa Till Number used for STK Push payments
+                Use the matching Safaricom Daraja business number. Numbers must contain 5 to 7 digits.
               </p>
             </div>
             <div>
@@ -696,7 +748,7 @@ export default function Settings() {
               screen reports which server configuration entries are missing.
             </div>
             <div>
-              <Label htmlFor="mpesa_paybill">Paybill Number (Optional)</Label>
+              <Label htmlFor="mpesa_paybill">Paybill Number for customer-initiated payments (Optional)</Label>
               <Input
                 id="mpesa_paybill"
                 value={settings.mpesa_paybill || ""}
@@ -705,7 +757,7 @@ export default function Settings() {
                 disabled={role !== "admin"}
               />
               <p className="text-xs text-muted-foreground mt-1">
-                Register the Paybill callback after configuring the server&apos;s public HTTPS callback settings.
+                This also enables customer-initiated Paybill checkout after callback registration. It can be the same number used above for STK Push.
               </p>
               <Button
                 type="button"
@@ -719,9 +771,9 @@ export default function Settings() {
             </div>
             <div className="p-4 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg">
               <p className="text-sm text-amber-800 dark:text-amber-200">
-                <strong>Important:</strong> The Till Number above is used for
-                automatic STK Push payments. Make sure it matches your Safaricom
-                Daraja API configuration.
+                <strong>Important:</strong> Choose the correct account type for
+                STK Push. Till uses Buy Goods; Paybill uses PayBillOnline. The
+                number and type must match your Safaricom Daraja account.
               </p>
             </div>
           </CardContent>

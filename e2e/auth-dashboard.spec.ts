@@ -64,16 +64,20 @@ test("cashier completes OTP login, sees dashboard data, and can log out", async 
   });
 
   await page.goto("/auth", { waitUntil: "domcontentloaded" });
-  await page.getByLabel("Email").fill("cashier@example.test");
+  await page.getByLabel("Email Address").fill("cashier@example.test");
   await page.getByLabel("Password").fill("ValidPassword123!");
-  await page.getByRole("button", { name: "Login" }).click();
+  await page.getByRole("button", { name: "Sign In" }).click();
 
   await expect(page.getByRole("heading", { name: "Security Verification" })).toBeVisible();
-  await page.getByLabel("OTP Code").fill("000000");
+  const otpInput = page.getByLabel("OTP Code");
+  await expect(otpInput).toHaveAttribute("placeholder", "Enter 6-digit code");
+  await expect(otpInput).toHaveAttribute("autocomplete", "one-time-code");
+  await expect(otpInput).not.toHaveAttribute("placeholder", /@/);
+  await otpInput.fill("000000");
   await page.getByRole("button", { name: "Verify OTP" }).click();
   await expect(page.getByText("Invalid OTP code")).toBeVisible();
 
-  await page.getByLabel("OTP Code").fill("123456");
+  await otpInput.fill("123456");
   await page.getByRole("button", { name: "Verify OTP" }).click();
   await expect(page).toHaveURL(/\/dashboard$/);
   await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
@@ -83,7 +87,7 @@ test("cashier completes OTP login, sees dashboard data, and can log out", async 
 
   await page.getByRole("button", { name: "Logout" }).click();
   await expect(page).toHaveURL(/\/auth$/);
-  await expect(page.getByRole("button", { name: "Login" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sign In" })).toBeVisible();
 });
 
 test("locations recover automatically after a temporary API outage", async ({ page }) => {

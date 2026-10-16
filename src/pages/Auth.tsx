@@ -107,7 +107,11 @@ export default function Auth() {
                   name="code"
                   type="text"
                   maxLength={6}
-                  placeholder="123456"
+                  minLength={6}
+                  pattern="[0-9]{6}"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  placeholder="Enter 6-digit code"
                   required
                 />
               </div>

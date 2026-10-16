@@ -499,8 +499,10 @@ export class SalesController {
 
             let warehouse = null;
             if (warehouse_id) {
-                warehouse = await queryRunner.manager.findOneBy(Warehouse, { id: warehouse_id });
-                if (!warehouse) throw new Error("Warehouse not found");
+                warehouse = await queryRunner.manager.findOne(Warehouse, {
+                    where: { id: warehouse_id, is_active: true },
+                });
+                if (!warehouse) throw new Error("Warehouse not found or inactive");
             }
 
             let calculatedSubtotal = 0;
@@ -530,6 +532,7 @@ export class SalesController {
 
                 // Check and decrement branch-specific stock if warehouse provided
                 let movementQuantityBefore = Number(product.stock_on_hand);
+                let branchStockAfter: number | null = null;
                 const reservedGlobal = getReservedQuantity(reservedSessions, product.id, checkout_session_id);
                 if (Number(product.stock_on_hand) - reservedGlobal < item.quantity) {
                     throw new Error(`Insufficient unreserved global stock for product ${product.name}`);
@@ -546,6 +549,7 @@ export class SalesController {
                     movementQuantityBefore = branchStock.stock_on_hand;
                     branchStock.stock_on_hand -= item.quantity;
                     await queryRunner.manager.save(branchStock);
+                    branchStockAfter = Number(branchStock.stock_on_hand);
                 } else {
                     if (product.stock_on_hand < item.quantity) {
                         throw new Error(`Insufficient global stock for product ${product.name}`);
@@ -624,7 +628,7 @@ export class SalesController {
                 // Push inventory update event
                 inventoryUpdates.push({
                     productId: product.id,
-                    newStockLevel: product.stock_on_hand,
+                    newStockLevel: branchStockAfter ?? Number(product.stock_on_hand),
                     warehouseId: warehouse_id || null
                 });
             }
@@ -957,15 +961,22 @@ export class SalesController {
                 await queryRunner.manager.save(product);
 
                 // Revert branch stock if applicable
+                let branchStockAfter: number | null = null;
                 if (sale.warehouse) {
-                    const branchStock = await queryRunner.manager.findOneBy(WarehouseStock, {
+                    let branchStock = await queryRunner.manager.findOneBy(WarehouseStock, {
                         warehouse_id: sale.warehouse.id,
                         product_id: product.id
                     });
-                    if (branchStock) {
-                        branchStock.stock_on_hand += item.quantity;
-                        await queryRunner.manager.save(branchStock);
+                    if (!branchStock) {
+                        branchStock = queryRunner.manager.create(WarehouseStock, {
+                            warehouse_id: sale.warehouse.id,
+                            product_id: product.id,
+                            stock_on_hand: 0,
+                        });
                     }
+                    branchStock.stock_on_hand += item.quantity;
+                    await queryRunner.manager.save(branchStock);
+                    branchStockAfter = Number(branchStock.stock_on_hand);
                 }
 
                 // Revert ProductBatch (just put it back in the newest active batch)
@@ -980,7 +991,7 @@ export class SalesController {
 
                 inventoryUpdates.push({
                     productId: product.id,
-                    newStockLevel: product.stock_on_hand,
+                    newStockLevel: branchStockAfter ?? Number(product.stock_on_hand),
                     warehouseId: sale.warehouse ? sale.warehouse.id : null
                 });
             }
@@ -1093,9 +1104,11 @@ export class SalesController {
             if (customer_id && !customer) throw new Error("Customer not found");
 
             const warehouse = warehouse_id
-                ? await queryRunner.manager.findOneBy(Warehouse, { id: warehouse_id })
+                ? await queryRunner.manager.findOne(Warehouse, {
+                    where: { id: warehouse_id, is_active: true },
+                })
                 : null;
-            if (warehouse_id && !warehouse) throw new Error("Warehouse not found");
+            if (warehouse_id && !warehouse) throw new Error("Warehouse not found or inactive");
 
             const products = await queryRunner.manager.find(Product, {
                 where: { id: In(items.map((item) => item.product_id)) },

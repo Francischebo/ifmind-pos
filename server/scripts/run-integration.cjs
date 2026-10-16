@@ -228,17 +228,28 @@ const run = async () => {
             TEST_DATABASE_URL: testDatabaseUrl.toString(),
         };
 
-        const apiResult = spawnSync(
-            process.execPath,
-            [
-                "--require",
-                "ts-node/register",
-                "--test",
-                "src/tests/business-workflow.integration.test.ts",
-                "src/tests/permission-matrix.integration.test.ts",
-            ],
-            { cwd: process.cwd(), stdio: "inherit", env: testEnvironment }
+        const apiTestArguments = ["--require", "ts-node/register", "--test"];
+        const testConcurrency = process.env.POS_INTEGRATION_TEST_CONCURRENCY;
+        if (testConcurrency !== undefined) {
+            if (!/^[1-9]\d*$/.test(testConcurrency)) {
+                throw new Error("POS_INTEGRATION_TEST_CONCURRENCY must be a positive integer.");
+            }
+            apiTestArguments.push("--test-concurrency", testConcurrency);
+        }
+        const testNamePattern = process.env.POS_INTEGRATION_TEST_NAME_PATTERN;
+        if (testNamePattern) {
+            apiTestArguments.push("--test-name-pattern", testNamePattern);
+        }
+        apiTestArguments.push(
+            "src/tests/business-workflow.integration.test.ts",
+            "src/tests/permission-matrix.integration.test.ts",
         );
+
+        const apiResult = spawnSync(process.execPath, apiTestArguments, {
+            cwd: process.cwd(),
+            stdio: "inherit",
+            env: testEnvironment,
+        });
         if (apiResult.error) throw apiResult.error;
         exitCode = apiResult.status ?? 1;
 

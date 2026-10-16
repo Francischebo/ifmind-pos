@@ -39,8 +39,16 @@ MPESA_PENDING_QUERY_TIMEOUT_MINUTES="2"
 MPESA_PENDING_MAX_AGE_MINUTES="15"
 CHECKOUT_RESERVATION_TTL_MINUTES="15"
 ```
-Ensure the till shortcode is saved in the POS Settings or database:
-- `key = "mpesa_shortcode"`, `value = "174379"`
+In **Settings > MPESA Configuration**, select the account type that matches the
+Daraja shortcode and enter its number:
+- **Till (Buy Goods):** STK uses `CustomerBuyGoodsOnline`.
+- **Paybill:** STK uses `CustomerPayBillOnline`.
+
+The Till number is saved as `mpesa_shortcode` (legacy
+`mpesa_till_number` is still accepted); the STK account type is saved as
+`mpesa_stk_account_type`. For example, sandbox shortcode `174379` is normally
+configured as a Till. A separate Paybill number can be saved for manual C2B
+checkout and callback registration.
 
 ---
 
@@ -59,7 +67,7 @@ Ensure the till shortcode is saved in the POS Settings or database:
        "items": [...]
      }
      ```
-  2. The mobile phone (or sandbox simulator) receives the STK prompt: "Do you want to pay KES 10.00 to 174379...?"
+  2. The mobile phone (or sandbox simulator) receives the STK prompt for the configured Till or Paybill account.
   3. Enter the test M-Pesa PIN (`1234` or sandbox default).
   4. Wait 5–10 seconds for Safaricom to deliver the webhook callback to `/api/webhooks/mpesa/callback`.
 - **Expected Result:**
@@ -68,6 +76,11 @@ Ensure the till shortcode is saved in the POS Settings or database:
   - `mpesa_receipt_number` is populated (e.g. `NLJ7RT61SV`).
   - POS cashier screen updates from "Waiting for customer PIN..." to "Payment Received: KES 10.00".
   - Completing the sale produces a receipt and posts the corresponding double-entry accounting entry to the general ledger.
+
+  Repeat this test with a valid Paybill configured as the STK account type and
+  verify Daraja receives `CustomerPayBillOnline`. A Till must use
+  `CustomerBuyGoodsOnline`; the account number and selected type must match the
+  Safaricom Daraja account.
 
 ---
 

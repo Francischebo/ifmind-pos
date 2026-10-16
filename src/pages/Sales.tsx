@@ -67,6 +67,7 @@ import {
 interface Warehouse {
   id: string;
   name: string;
+  is_main: boolean;
 }
 
 interface Product {
@@ -389,9 +390,10 @@ export default function Sales() {
       const data = await ApiService.get<Warehouse[]>("/warehouses");
       if (data && data.length > 0) {
         setWarehouses(data);
+        const defaultWarehouse = data.find((warehouse) => warehouse.is_main) ?? data[0];
         const preferred = data.some((warehouse) => warehouse.id === selectedWarehouse)
           ? selectedWarehouse
-          : data[0].id;
+          : defaultWarehouse.id;
         setSelectedWarehouse(preferred);
         if (user?.id) {
           localStorage.setItem(
@@ -526,9 +528,12 @@ export default function Sales() {
 
   const filteredProducts = products.filter(
     (p) =>
-      (p.name || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (p.sku || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (p.barcode && p.barcode.includes(searchTerm)),
+      p.stock_on_hand > 0 &&
+      (
+        (p.name || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (p.sku || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (p.barcode && p.barcode.includes(searchTerm))
+      ),
   );
 
   const addToCart = (product: Product) => {

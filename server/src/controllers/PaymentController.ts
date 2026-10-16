@@ -47,11 +47,16 @@ export const getMpesaStkConfigurationIssues = (
     environment: NodeJS.ProcessEnv,
     shortcode: string | null | undefined,
     callbackUrlSetting?: string | null,
+    accountType?: string | null,
 ) => {
     const issues: string[] = [];
     const normalizedShortcode = shortcode?.trim() || "";
+    const normalizedAccountType = accountType?.trim().toLowerCase() || "till";
+    if (normalizedAccountType !== "till" && normalizedAccountType !== "paybill") {
+        issues.push("a valid Till or Paybill STK account type in Settings (mpesa_stk_account_type)");
+    }
     if (!/^\d{5,7}$/.test(normalizedShortcode)) {
-        issues.push("a valid Till Number / Shortcode in Settings (mpesa_shortcode)");
+        issues.push("a valid 5 to 7 digit Till Number / Paybill Number in Settings");
     }
 
     const requiredEnvironment: Array<[string, string]> = [
@@ -92,6 +97,11 @@ export const getMpesaStkConfigurationIssues = (
     }
     return issues;
 };
+
+export const getMpesaStkTransactionType = (accountType: string | null | undefined) =>
+    accountType?.trim().toLowerCase() === "paybill"
+        ? "CustomerPayBillOnline"
+        : "CustomerBuyGoodsOnline";
 
 const normalizeMpesaPhone = (value: unknown) => {
     const phone = String(value ?? "").replace(/\D/g, "").replace(/^0/, "254");
@@ -306,14 +316,32 @@ export class PaymentController {
             if (loyalty_discount > subtotal) return res.status(400).json({ error: "Discount exceeds sale subtotal" });
 
             const settingRepository = AppDataSource.getRepository(Setting);
-            const [shortcodeSetting, legacyTillSetting, callbackSetting] = await Promise.all([
+            const [
+                shortcodeSetting,
+                legacyTillSetting,
+                callbackSetting,
+                paybillSetting,
+                accountTypeSetting,
+            ] = await Promise.all([
                 settingRepository.findOneBy({ key: "mpesa_shortcode" }),
                 settingRepository.findOneBy({ key: "mpesa_till_number" }),
                 settingRepository.findOneBy({ key: "mpesa_callback_url" }),
+                settingRepository.findOneBy({ key: "mpesa_paybill" }),
+                settingRepository.findOneBy({ key: "mpesa_stk_account_type" }),
             ]);
-            const shortcode = shortcodeSetting?.value?.trim() || legacyTillSetting?.value?.trim() || "";
+            const stkAccountType = accountTypeSetting?.value?.trim().toLowerCase() === "paybill"
+                ? "paybill"
+                : "till";
+            const shortcode = stkAccountType === "paybill"
+                ? paybillSetting?.value?.trim() || ""
+                : shortcodeSetting?.value?.trim() || legacyTillSetting?.value?.trim() || "";
             const callbackUrl = callbackSetting?.value?.trim() || process.env.MPESA_CALLBACK_URL?.trim() || "";
-            const configurationIssues = getMpesaStkConfigurationIssues(process.env, shortcode, callbackUrl);
+            const configurationIssues = getMpesaStkConfigurationIssues(
+                process.env,
+                shortcode,
+                callbackUrl,
+                stkAccountType,
+            );
             if (configurationIssues.length > 0) {
                 return res.status(503).json({
                     error: `M-Pesa STK Push is not configured: ${configurationIssues.join("; ")}.`,
@@ -411,7 +439,7 @@ export class PaymentController {
                     BusinessShortCode: shortcode,
                     Password: password,
                     Timestamp: timestamp,
-                    TransactionType: "CustomerBuyGoodsOnline",
+                    TransactionType: getMpesaStkTransactionType(stkAccountType),
                     Amount: parsedAmount,
                     PartyA: formattedPhone,
                     PartyB: shortcode,
@@ -481,26 +509,41 @@ export class PaymentController {
     static async getMpesaPaymentConfig(_req: Request, res: Response) {
         try {
             const settings = AppDataSource.getRepository(Setting);
-            const [paybill, registeredShortcode, shortcode, legacyTill, callbackUrl] = await Promise.all([
+            const [
+                paybill,
+                registeredShortcode,
+                shortcode,
+                legacyTill,
+                callbackUrl,
+                accountType,
+            ] = await Promise.all([
                 settings.findOneBy({ key: "mpesa_paybill" }),
                 settings.findOneBy({ key: "mpesa_c2b_registered_shortcode" }),
                 settings.findOneBy({ key: "mpesa_shortcode" }),
                 settings.findOneBy({ key: "mpesa_till_number" }),
                 settings.findOneBy({ key: "mpesa_callback_url" }),
+                settings.findOneBy({ key: "mpesa_stk_account_type" }),
             ]);
             const callbackConfigured = Boolean(
                 process.env.MPESA_C2B_CALLBACK_BASE_URL &&
                 /^[a-f0-9]{64,128}$/i.test(process.env.MPESA_C2B_CALLBACK_TOKEN || ""),
             );
-            const savedShortcode = shortcode?.value?.trim() || legacyTill?.value?.trim() || "";
+            const stkAccountType = accountType?.value?.trim().toLowerCase() === "paybill"
+                ? "paybill"
+                : "till";
+            const savedShortcode = stkAccountType === "paybill"
+                ? paybill?.value?.trim() || ""
+                : shortcode?.value?.trim() || legacyTill?.value?.trim() || "";
             const stkPushIssues = getMpesaStkConfigurationIssues(
                 process.env,
                 savedShortcode,
                 callbackUrl?.value,
+                stkAccountType,
             );
             return res.json({
                 paybill_number: paybill?.value || null,
                 paybill_c2b_enabled: Boolean(callbackConfigured && paybill?.value === registeredShortcode?.value),
+                stk_account_type: stkAccountType,
                 stk_push_enabled: stkPushIssues.length === 0,
                 stk_push_issues: stkPushIssues,
             });

@@ -450,6 +450,7 @@ export class ReturnController {
 
                     let movementQuantityBefore = aggregateQuantityBefore;
                     let movementLocationId: string | null = null;
+                    let branchStockAfter: number | null = null;
                     if (sale.warehouse) {
                         let branchStock = await queryRunner.manager.findOneBy(WarehouseStock, {
                             warehouse_id: sale.warehouse.id,
@@ -465,6 +466,7 @@ export class ReturnController {
                         movementQuantityBefore = branchStock.stock_on_hand;
                         branchStock.stock_on_hand += retItem.quantity;
                         await queryRunner.manager.save(branchStock);
+                        branchStockAfter = Number(branchStock.stock_on_hand);
                         movementLocationId = sale.warehouse.id;
                     }
 
@@ -512,7 +514,7 @@ export class ReturnController {
 
                     inventoryUpdates.push({
                         productId: product.id,
-                        newStockLevel: product.stock_on_hand,
+                        newStockLevel: branchStockAfter ?? Number(product.stock_on_hand),
                         warehouseId: sale.warehouse ? sale.warehouse.id : null
                     });
                 } else if (retItem.condition === ReturnItemCondition.DAMAGED) {

@@ -29,6 +29,7 @@ const SETTINGS_KEYS = new Set([
     "mpesa_paybill",
     "mpesa_till_number",
     "mpesa_shortcode",
+    "mpesa_stk_account_type",
     "mpesa_callback_url",
     "receipt_footer",
     "loyalty_points_rate",
@@ -107,6 +108,23 @@ export const sanitizeSettingsPayload = (input: unknown) => {
                 throw new Error("Product units must be a valid JSON list.");
             }
             sanitized[key] = JSON.stringify(normalizeProductUnitOfMeasures(parsed));
+            continue;
+        }
+
+        if (key === "mpesa_stk_account_type") {
+            if (value !== "till" && value !== "paybill") {
+                throw new Error("M-Pesa STK account type must be Till or Paybill.");
+            }
+            sanitized[key] = value;
+            continue;
+        }
+
+        if (key === "mpesa_shortcode" || key === "mpesa_till_number" || key === "mpesa_paybill") {
+            const number = String(value).trim();
+            if (number !== "" && !/^\d{5,7}$/.test(number)) {
+                throw new Error(`${key} must be a valid 5 to 7 digit M-Pesa number.`);
+            }
+            sanitized[key] = number;
             continue;
         }
 

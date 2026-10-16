@@ -96,7 +96,17 @@ The sale pipeline guarantees atomic stock allocation, idempotency, and financial
 
 ---
 
-## 4. Safaricom M-Pesa Flow
+## 4. Warehouse-Scoped Stock
+
+- Product opening stock is initialized in the active warehouse selected during product creation; product imports can name a warehouse and otherwise use the main warehouse.
+- `GET /api/products?warehouse_id=<id>` reports each product's balance in that active warehouse. The Products inventory view hides products with no stock at the selected warehouse.
+- `GET /api/products` reports the sum of warehouse balances for each product. Products with no warehouse balance retain the legacy product-level quantity until stock is assigned to a warehouse.
+- The POS always sells from one selected warehouse and uses that branch's balance for availability and inventory updates. The all-warehouse view is a consolidated inventory view, not a sell-from-anywhere mode.
+- Receipts, adjustments, sales, returns, and stocktakes update warehouse balances and the product aggregate in the same transaction. Transfers move balances between warehouses without changing the aggregate.
+
+---
+
+## 5. Safaricom M-Pesa Flow
 
 M-Pesa payments (STK Push & Paybill C2B) are processed with strict amount/phone validation and anti-replay guards:
 
@@ -124,7 +134,7 @@ M-Pesa payments (STK Push & Paybill C2B) are processed with strict amount/phone 
 
 ---
 
-## 5. Offline-First Synchronization Flow
+## 6. Offline-First Synchronization Flow
 
 When connectivity drops, the POS till functions offline using browser storage:
 

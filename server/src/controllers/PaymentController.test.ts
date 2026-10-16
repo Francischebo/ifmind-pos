@@ -33,6 +33,7 @@ import { sanitizePurchaseOrderCreatePayload, sanitizePurchaseOrderStatusPayload 
 import { sanitizeTaxClassPayload, sanitizeTaxClassUpdatePayload } from "./TaxController";
 import {
   getMpesaStkConfigurationIssues,
+  getMpesaStkTransactionType,
   hashMpesaCallbackToken,
   sanitizeMpesaStkPayload,
   verifyMpesaCallbackToken,
@@ -196,6 +197,20 @@ test("M-Pesa STK setup accepts a saved Till and server credentials with a public
     ),
     [],
   );
+});
+
+test("M-Pesa STK setup accepts a configured Paybill and selects the matching Daraja transaction type", () => {
+  const environment = {
+    MPESA_CONSUMER_KEY: "test-consumer-key",
+    MPESA_CONSUMER_SECRET: "test-consumer-secret",
+    MPESA_PASSKEY: "test-passkey",
+    MPESA_API_BASE_URL: "https://api.safaricom.test",
+  };
+  const callbackUrl = "https://pos.example.test/api/webhooks/mpesa/callback";
+
+  assert.deepEqual(getMpesaStkConfigurationIssues(environment, "123456", callbackUrl, "paybill"), []);
+  assert.equal(getMpesaStkTransactionType("paybill"), "CustomerPayBillOnline");
+  assert.equal(getMpesaStkTransactionType("till"), "CustomerBuyGoodsOnline");
 });
 
 test("M-Pesa STK setup reports missing callback without exposing credential values", () => {
@@ -518,6 +533,29 @@ test("product catalog settings validate and persist configured units of measure"
   assert.throws(
     () => sanitizeSettingsPayload({ product_unit_of_measures: '["kg","KG"]' }),
     /listed more than once/,
+  );
+});
+
+test("M-Pesa settings accept valid Till or Paybill details and reject invalid account configuration", () => {
+  assert.deepEqual(
+    sanitizeSettingsPayload({
+      mpesa_stk_account_type: "paybill",
+      mpesa_paybill: "123456",
+      mpesa_shortcode: "174379",
+    }),
+    {
+      mpesa_stk_account_type: "paybill",
+      mpesa_paybill: "123456",
+      mpesa_shortcode: "174379",
+    },
+  );
+  assert.throws(
+    () => sanitizeSettingsPayload({ mpesa_stk_account_type: "merchant" }),
+    /Till or Paybill/,
+  );
+  assert.throws(
+    () => sanitizeSettingsPayload({ mpesa_paybill: "ABC123" }),
+    /valid 5 to 7 digit/,
   );
 });
 
@@ -1338,4 +1376,3 @@ test("PesapalMockService prefixes mock tracking IDs and identifies mock state", 
   assert.equal(result.tracking_id.startsWith("TEST-PESA-"), true);
   assert.equal(result.redirect_url.includes("mock=true"), true);
 });
-

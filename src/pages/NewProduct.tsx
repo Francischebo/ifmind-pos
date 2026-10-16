@@ -30,6 +30,11 @@ interface TaxClass {
   is_default: boolean;
 }
 
+interface ProductCategory {
+  id: string;
+  name: string;
+}
+
 interface Warehouse {
   id: string;
   name: string;
@@ -62,6 +67,8 @@ export default function NewProduct() {
   );
 
   const [taxClasses, setTaxClasses] = useState<TaxClass[]>([]);
+  const [categories, setCategories] = useState<ProductCategory[]>([]);
+  const [productUnits, setProductUnits] = useState<string[]>(["piece"]);
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [warehouseId, setWarehouseId] = useState("");
   const [hasVariants, setHasVariants] = useState(false);
@@ -86,11 +93,16 @@ export default function NewProduct() {
     stock_on_hand: "0",
     reorder_level: "10",
     tax_class_id: "",
+    category_id: "",
+    unit_of_measure: "piece",
+    location: "main",
   });
 
   useEffect(() => {
-    loadTaxClasses();
-    loadWarehouses();
+    void loadTaxClasses();
+    void loadWarehouses();
+    void loadCategories();
+    void loadProductUnits();
   }, []);
 
   const loadTaxClasses = async () => {
@@ -119,6 +131,41 @@ export default function NewProduct() {
       if (defaultWarehouse) setWarehouseId(defaultWarehouse.id);
     } catch (error) {
       toast.error(error.message || "Failed to load warehouses");
+    }
+  };
+
+  const loadCategories = async () => {
+    try {
+      const data = await ApiService.get<ProductCategory[]>("/categories");
+      setCategories(data || []);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to load product categories");
+    }
+  };
+
+  const loadProductUnits = async () => {
+    try {
+      const settings = await ApiService.get<Record<string, string>>("/settings");
+      const configuredUnits = settings.product_unit_of_measures
+        ? JSON.parse(settings.product_unit_of_measures) as unknown
+        : ["piece"];
+      if (
+        !Array.isArray(configuredUnits) ||
+        configuredUnits.length === 0 ||
+        configuredUnits.some((unit) => typeof unit !== "string" || !unit.trim())
+      ) {
+        throw new Error("Product units are not configured correctly in Settings.");
+      }
+      const units = configuredUnits.map((unit) => (unit as string).trim());
+      setProductUnits(units);
+      setFormData((previous) => ({
+        ...previous,
+        unit_of_measure: units.includes(previous.unit_of_measure)
+          ? previous.unit_of_measure
+          : units[0],
+      }));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to load product units");
     }
   };
 
@@ -176,9 +223,40 @@ export default function NewProduct() {
     const openingQuantities =
       hasVariants && generatedVariants.length > 0
         ? generatedVariants.map((variant) =>
-            parseInt(variant.stock_on_hand || "0"),
+            Number(variant.stock_on_hand),
           )
-        : [parseInt(formData.stock_on_hand || "0")];
+        : [Number(formData.stock_on_hand)];
+    if (hasVariants && generatedVariants.length === 0) {
+      toast.error("Add at least one complete variant option before saving this product.");
+      return;
+    }
+    if (openingQuantities.some((quantity) => !Number.isInteger(quantity) || quantity < 0)) {
+      toast.error("Opening stock must be a non-negative whole number.");
+      return;
+    }
+    const pricesAreValid = hasVariants
+      ? generatedVariants.every((variant) =>
+          variant.sku.trim() &&
+          variant.retail_price.trim() !== "" &&
+          Number.isFinite(Number(variant.retail_price)) &&
+          Number(variant.retail_price) >= 0 &&
+          variant.unit_cost.trim() !== "" &&
+          Number.isFinite(Number(variant.unit_cost)) &&
+          Number(variant.unit_cost) >= 0,
+        )
+      : Number.isFinite(Number(formData.retail_price)) &&
+        Number(formData.retail_price) >= 0 &&
+        Number.isFinite(Number(formData.unit_cost)) &&
+        Number(formData.unit_cost) >= 0;
+    if (!pricesAreValid) {
+      toast.error("Enter a SKU, retail price, and unit cost of zero or more for every product and variant.");
+      return;
+    }
+    const reorderLevel = Number(formData.reorder_level);
+    if (!Number.isInteger(reorderLevel) || reorderLevel < 0) {
+      toast.error("Reorder level must be a non-negative whole number.");
+      return;
+    }
     if (openingQuantities.some((quantity) => quantity > 0) && !warehouseId) {
       toast.error("Select a warehouse for opening stock");
       return;
@@ -190,11 +268,14 @@ export default function NewProduct() {
         name: string;
         sku: string;
         barcode: string;
+        category_id: string | null;
         unit_cost: number;
         retail_price: number;
         stock_on_hand: number;
         reorder_level: number;
         tax_class_id: string | null;
+        unit_of_measure: string;
+        location: string;
         warehouse_id?: string;
         variants?: Array<{
           sku: string;
@@ -208,11 +289,14 @@ export default function NewProduct() {
         name: formData.name,
         sku: formData.sku,
         barcode: formData.barcode || formData.sku,
+        category_id: formData.category_id || null,
         unit_cost: parseFloat(formData.unit_cost || "0"),
         retail_price: parseFloat(formData.retail_price || "0"),
-        stock_on_hand: parseInt(formData.stock_on_hand || "0"),
-        reorder_level: parseInt(formData.reorder_level || "10"),
+        stock_on_hand: Number(formData.stock_on_hand || "0"),
+        reorder_level: reorderLevel,
         tax_class_id: formData.tax_class_id || null,
+        unit_of_measure: formData.unit_of_measure,
+        location: formData.location.trim() || "main",
         warehouse_id: warehouseId || undefined,
       };
 
@@ -221,7 +305,7 @@ export default function NewProduct() {
           ...v,
           unit_cost: parseFloat(v.unit_cost || "0"),
           retail_price: parseFloat(v.retail_price || "0"),
-          stock_on_hand: parseInt(v.stock_on_hand || "0"),
+          stock_on_hand: Number(v.stock_on_hand || "0"),
           barcode: v.barcode || v.sku,
         }));
       }
@@ -291,6 +375,9 @@ export default function NewProduct() {
                 stock_on_hand: "0",
                 reorder_level: "10",
                 tax_class_id: taxClasses.find((t) => t.is_default)?.id || "",
+                category_id: "",
+                unit_of_measure: productUnits[0] || "piece",
+                location: "main",
               });
               setHasVariants(false);
               setOptions([{ name: "", values: "" }]);
@@ -364,6 +451,62 @@ export default function NewProduct() {
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="category">Category</Label>
+                <Select
+                  value={formData.category_id || "none"}
+                  onValueChange={(value) =>
+                    setFormData({
+                      ...formData,
+                      category_id: value === "none" ? "" : value,
+                    })
+                  }
+                >
+                  <SelectTrigger id="category">
+                    <SelectValue placeholder="Select category" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No category</SelectItem>
+                    {categories.map((category) => (
+                      <SelectItem key={category.id} value={category.id}>
+                        {category.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="unit_of_measure">Unit of Measure *</Label>
+                <Select
+                  value={formData.unit_of_measure}
+                  onValueChange={(value) =>
+                    setFormData({ ...formData, unit_of_measure: value })
+                  }
+                >
+                  <SelectTrigger id="unit_of_measure">
+                    <SelectValue placeholder="Select unit" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {productUnits.map((unit) => (
+                      <SelectItem key={unit} value={unit}>
+                        {unit}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="location">Storage Location</Label>
+                <Input
+                  id="location"
+                  maxLength={100}
+                  value={formData.location}
+                  onChange={(e) =>
+                    setFormData({ ...formData, location: e.target.value })
+                  }
+                  placeholder="e.g. Main shelf"
+                />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="sku">Parent SKU *</Label>
@@ -516,6 +659,8 @@ export default function NewProduct() {
                           <Input
                             className="h-8"
                             type="number"
+                            min="0"
+                            step="0.01"
                             value={v.retail_price}
                             onChange={(e) =>
                               handleVariantChange(
@@ -530,6 +675,8 @@ export default function NewProduct() {
                           <Input
                             className="h-8"
                             type="number"
+                            min="0"
+                            step="0.01"
                             value={v.unit_cost}
                             onChange={(e) =>
                               handleVariantChange(
@@ -544,6 +691,8 @@ export default function NewProduct() {
                           <Input
                             className="h-8"
                             type="number"
+                            min="0"
+                            step="1"
                             value={v.stock_on_hand}
                             onChange={(e) =>
                               handleVariantChange(
@@ -602,6 +751,8 @@ export default function NewProduct() {
                     id="stock_on_hand"
                     type="number"
                     min="0"
+                    step="1"
+                    required
                     value={formData.stock_on_hand}
                     onChange={(e) =>
                       setFormData({
@@ -617,6 +768,8 @@ export default function NewProduct() {
                     id="reorder_level"
                     type="number"
                     min="0"
+                    step="1"
+                    required
                     value={formData.reorder_level}
                     onChange={(e) =>
                       setFormData({

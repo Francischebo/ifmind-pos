@@ -169,6 +169,7 @@ let createdQcProductSku = "";
 let createdCustomerPhone = "";
 let createdVendorId = "";
 let createdReceivingWarehouseId = "";
+let createdAggregateWarehouseId = "";
 let createdTransferWarehouseId = "";
 let createdStockTakeId = "";
 let createdSaleId = "";
@@ -348,6 +349,10 @@ test.after(async () => {
                     }
                     await AppDataSource.getRepository(WarehouseStock).delete({ warehouse_id: createdReceivingWarehouseId });
                     await AppDataSource.getRepository(Warehouse).delete({ id: createdReceivingWarehouseId });
+                }
+                if (createdAggregateWarehouseId) {
+                    await AppDataSource.getRepository(WarehouseStock).delete({ warehouse_id: createdAggregateWarehouseId });
+                    await AppDataSource.getRepository(Warehouse).delete({ id: createdAggregateWarehouseId });
                 }
                 if (createdTransferWarehouseId) {
                     await AppDataSource.getRepository(WarehouseStock).delete({ warehouse_id: createdTransferWarehouseId });
@@ -582,6 +587,15 @@ test("admin can access protected product workflow and reject unauthorized reques
             })
         );
         createdReceivingWarehouseId = receivingWarehouse.id;
+        const aggregateWarehouse = await AppDataSource.getRepository(Warehouse).save(
+            AppDataSource.getRepository(Warehouse).create({
+                name: `Integration Aggregate Warehouse ${randomUUID().slice(0, 8)}`,
+                location_address: "Integration test",
+                is_main: false,
+                is_active: true,
+            })
+        );
+        createdAggregateWarehouseId = aggregateWarehouse.id;
 
         const forbiddenResponse = await fetch(`http://127.0.0.1:${port}/api/products`, {
             headers: { "Content-Type": "application/json" },
@@ -627,6 +641,44 @@ test("admin can access protected product workflow and reject unauthorized reques
             product_id: createdProduct.id,
         });
         assert.equal(openingWarehouseStock.stock_on_hand, 12);
+
+        await AppDataSource.getRepository(WarehouseStock).save(
+            AppDataSource.getRepository(WarehouseStock).create({
+                warehouse_id: aggregateWarehouse.id,
+                product_id: createdProduct.id,
+                stock_on_hand: 3,
+            })
+        );
+        await AppDataSource.getRepository(Product).update(createdProduct.id, { stock_on_hand: 15 });
+
+        const allWarehouseProductsResponse = await fetch(`http://127.0.0.1:${port}/api/products`, {
+            headers: tokenHeader,
+        });
+        assert.equal(allWarehouseProductsResponse.status, 200);
+        const allWarehouseProducts = await allWarehouseProductsResponse.json() as IntegrationApiObject[];
+        assert.equal(
+            Number(allWarehouseProducts.find((product) => product.id === createdProduct.id)?.stock_on_hand),
+            15,
+            "All-warehouse product stock should sum the balances from every warehouse",
+        );
+        for (const [warehouse, expectedStock] of [[receivingWarehouse, 12], [aggregateWarehouse, 3]] as const) {
+            const warehouseProductsResponse = await fetch(
+                `http://127.0.0.1:${port}/api/products?warehouse_id=${encodeURIComponent(warehouse.id)}`,
+                { headers: tokenHeader },
+            );
+            assert.equal(warehouseProductsResponse.status, 200);
+            const warehouseProducts = await warehouseProductsResponse.json() as IntegrationApiObject[];
+            assert.equal(
+                Number(warehouseProducts.find((product) => product.id === createdProduct.id)?.stock_on_hand),
+                expectedStock,
+                `Warehouse-scoped product stock should only include ${warehouse.name}`,
+            );
+        }
+        await AppDataSource.getRepository(WarehouseStock).delete({
+            warehouse_id: aggregateWarehouse.id,
+            product_id: createdProduct.id,
+        });
+        await AppDataSource.getRepository(Product).update(createdProduct.id, { stock_on_hand: 12 });
 
         await AppDataSource.getRepository(Product).update(createdProduct.id, {
             stock_on_hand: 0,
@@ -702,6 +754,18 @@ test("admin can access protected product workflow and reject unauthorized reques
             body: JSON.stringify(salePayload),
         });
         assert.equal(saleWithoutShift.status, 400, "Sale creation must require an open shift");
+
+        await AppDataSource.getRepository(Warehouse).update(receivingWarehouse.id, { is_active: false });
+        const parkedSaleAtInactiveWarehouse = await fetch(`http://127.0.0.1:${port}/api/sales/park`, {
+            method: "POST",
+            headers: { ...tokenHeader, "Content-Type": "application/json" },
+            body: JSON.stringify({
+                items: [{ product_id: createdProduct.id, quantity: 1 }],
+                warehouse_id: receivingWarehouse.id,
+            }),
+        });
+        assert.equal(parkedSaleAtInactiveWarehouse.status, 400, "Parked sales must reject inactive warehouses");
+        await AppDataSource.getRepository(Warehouse).update(receivingWarehouse.id, { is_active: true });
 
         const qcSku = `QC-${Date.now()}-${randomUUID().slice(0, 6)}`;
         createdQcProductSku = qcSku;
@@ -789,6 +853,19 @@ test("admin can access protected product workflow and reject unauthorized reques
             await AppDataSource.getRepository(Shift).countBy({ cashier_id: adminUserId, status: ShiftStatus.OPEN }),
             1,
         );
+
+        await AppDataSource.getRepository(Warehouse).update(receivingWarehouse.id, { is_active: false });
+        const completedSaleAtInactiveWarehouse = await fetch(`http://127.0.0.1:${port}/api/sales`, {
+            method: "POST",
+            headers: { ...tokenHeader, "Content-Type": "application/json" },
+            body: JSON.stringify({
+                ...salePayload,
+                payment_method: "cash",
+                idempotency_key: `inactive-warehouse-${randomUUID()}`,
+            }),
+        });
+        assert.equal(completedSaleAtInactiveWarehouse.status, 400, "Completed sales must reject inactive warehouses");
+        await AppDataSource.getRepository(Warehouse).update(receivingWarehouse.id, { is_active: true });
 
         const expiredStoreCredit = await AppDataSource.getRepository(StoreCredit).save(
             AppDataSource.getRepository(StoreCredit).create({
@@ -1282,7 +1359,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             costChangedProduct.unit_cost = 25;
             await AppDataSource.getRepository(Product).save(costChangedProduct);
             discountedReturnApproval = await fetch(
-                `http://127.0.0.1:/api/admin/returns/approve/${discountedReturn.id}`,
+                `http://127.0.0.1:${port}/api/admin/returns/approve/${discountedReturn.id}`,
                 {
                     method: "POST",
                     headers: { ...tokenHeader, "Content-Type": "application/json" },
@@ -1320,7 +1397,7 @@ test("admin can access protected product workflow and reject unauthorized reques
         const secondDiscountedReturn = (await secondDiscountedReturnResponse.json() as IntegrationApiObject).request;
         createdSecondDiscountedReturnRequestId = secondDiscountedReturn.id;
         const secondDiscountedReturnApproval = await fetch(
-            `http://127.0.0.1:/api/admin/returns/approve/${secondDiscountedReturn.id}`,
+            `http://127.0.0.1:${port}/api/admin/returns/approve/${secondDiscountedReturn.id}`,
             {
                 method: "POST",
                 headers: { ...tokenHeader, "Content-Type": "application/json" },
@@ -1417,7 +1494,7 @@ test("admin can access protected product workflow and reject unauthorized reques
                 if (index === 0) createdFirstTaxRoundingReturnId = returnRequest.id;
                 else createdSecondTaxRoundingReturnId = returnRequest.id;
                 const approvalResponse = await fetch(
-                    `http://127.0.0.1:/api/admin/returns/approve/${returnRequest.id}`,
+                    `http://127.0.0.1:${port}/api/admin/returns/approve/${returnRequest.id}`,
                     {
                         method: "POST",
                         headers: { ...tokenHeader, "Content-Type": "application/json" },
@@ -1517,7 +1594,7 @@ test("admin can access protected product workflow and reject unauthorized reques
         };
         try {
             signingFailureResponse = await fetch(
-                `http://127.0.0.1:/api/admin/returns/approve/${etimsFailureReturn.id}`,
+                `http://127.0.0.1:${port}/api/admin/returns/approve/${etimsFailureReturn.id}`,
                 {
                     method: "POST",
                     headers: { ...tokenHeader, "Content-Type": "application/json" },
@@ -1630,12 +1707,12 @@ test("admin can access protected product workflow and reject unauthorized reques
 
         const stockBeforeDecisionRace = await productRepository.findOneByOrFail({ id: createdProduct.id });
         const decisionRaceResponses = await Promise.all([
-            fetch(`http://127.0.0.1:/api/admin/returns/approve/${noShiftCashReturn.id}`, {
+            fetch(`http://127.0.0.1:${port}/api/admin/returns/approve/${noShiftCashReturn.id}`, {
                 method: "POST",
                 headers: { ...tokenHeader, "Content-Type": "application/json" },
                 body: JSON.stringify({ refund_method: "store_credit" }),
             }),
-            fetch(`http://127.0.0.1:/api/admin/returns/reject/${noShiftCashReturn.id}`, {
+            fetch(`http://127.0.0.1:${port}/api/admin/returns/reject/${noShiftCashReturn.id}`, {
                 method: "POST",
                 headers: { ...tokenHeader, "Content-Type": "application/json" },
                 body: JSON.stringify({ rejection_reason: "Concurrent decision test" }),
@@ -1873,7 +1950,7 @@ test("admin can access protected product workflow and reject unauthorized reques
         const returnRequestBody = (await returnRequestResponse.json()) as IntegrationApiObject;
         createdReturnRequestId = returnRequestBody.request.id;
 
-        const approvalResponse = await fetch(`http://127.0.0.1:/api/admin/returns/approve/${createdReturnRequestId}`, {
+        const approvalResponse = await fetch(`http://127.0.0.1:${port}/api/admin/returns/approve/${createdReturnRequestId}`, {
             method: "POST",
             headers: { ...tokenHeader, "Content-Type": "application/json" },
             body: JSON.stringify({ refund_method: "store_credit" }),
@@ -1943,7 +2020,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             where: { id: createdExchangeReturnRequestId },
             relations: ["items"],
         });
-        const exchangeApprovalResponse = await fetch(`http://127.0.0.1:/api/admin/returns/approve/${createdExchangeReturnRequestId}`, {
+        const exchangeApprovalResponse = await fetch(`http://127.0.0.1:${port}/api/admin/returns/approve/${createdExchangeReturnRequestId}`, {
             method: "POST",
             headers: { ...tokenHeader, "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -2506,7 +2583,7 @@ test("admin can access protected product workflow and reject unauthorized reques
             id: openedShift.id,
         });
         const concurrentApprovals = await Promise.all([1, 2].map(() =>
-            fetch(`http://127.0.0.1:/api/admin/returns/approve/${createdMpesaReturnRequestId}`, {
+            fetch(`http://127.0.0.1:${port}/api/admin/returns/approve/${createdMpesaReturnRequestId}`, {
                 method: "POST",
                 headers: { ...tokenHeader, "Content-Type": "application/json" },
                 body: JSON.stringify({ refund_method: "mpesa" }),
@@ -2544,7 +2621,7 @@ test("admin can access protected product workflow and reject unauthorized reques
         );
 
         const mpesaRefundReceipt = `RFD${randomUUID().replace(/-/g, "").slice(0, 10).toUpperCase()}`;
-        const mpesaPayoutConfirmationUrl = `http://127.0.0.1:/api/admin/returns/${createdMpesaReturnRequestId}/mpesa-payout`;
+        const mpesaPayoutConfirmationUrl = `http://127.0.0.1:${port}/api/admin/returns/${createdMpesaReturnRequestId}/mpesa-payout`;
         const mpesaPayoutConfirmationResponse = await fetch(mpesaPayoutConfirmationUrl, {
             method: "POST",
             headers: { ...tokenHeader, "Content-Type": "application/json" },

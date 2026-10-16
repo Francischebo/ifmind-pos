@@ -307,7 +307,7 @@ export class InventoryController {
 
             await queryRunner.commitTransaction();
 
-            SocketService.emitInventoryUpdated(product.id, product.stock_on_hand, warehouse.id);
+            SocketService.emitInventoryUpdated(product.id, branchStock.stock_on_hand, warehouse.id);
 
             res.status(201).json(adjustment);
 
@@ -776,7 +776,7 @@ export class InventoryController {
 
                     inventoryUpdates.push({
                         productId: item.product.id,
-                        stockOnHand: Number(item.product.stock_on_hand),
+                        stockOnHand: Number(branchStock.stock_on_hand),
                         warehouseId: stockTake.warehouse.id,
                     });
                 }

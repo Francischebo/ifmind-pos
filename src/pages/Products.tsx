@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ApiService, API_BASE_URL } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -23,6 +23,18 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+
+interface Warehouse {
+  id: string;
+  name: string;
+}
 
 interface Product {
   id: string;
@@ -51,6 +63,8 @@ export default function Products() {
   const { toast } = useToast();
   const [products, setProducts] = useState<Product[]>([]);
   const [filteredProducts, setFilteredProducts] = useState<Product[]>([]);
+  const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
+  const [selectedWarehouse, setSelectedWarehouse] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
   const [loading, setLoading] = useState(true);
   const [isImporting, setIsImporting] = useState(false);
@@ -58,9 +72,61 @@ export default function Products() {
   const [importSummary, setImportSummary] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
+  const loadWarehouses = useCallback(async () => {
+    try {
+      const data = await ApiService.get<Warehouse[]>("/warehouses");
+      setWarehouses(data || []);
+    } catch (error) {
+      toast({
+        title: "Warehouse list unavailable",
+        description:
+          error instanceof Error ? error.message : "Unable to load warehouses.",
+        variant: "destructive",
+      });
+    }
+  }, [toast]);
+
+  const loadProducts = useCallback(async (warehouseId: string) => {
+    setLoading(true);
+    try {
+      const endpoint = warehouseId === "all"
+        ? "/products"
+        : `/products?warehouse_id=${encodeURIComponent(warehouseId)}`;
+      const data = await ApiService.get<Product[]>(endpoint);
+
+      const catalogProducts = (data || [])
+        .filter((product) => !product.is_parent)
+        .map((product) => ({
+          ...product,
+          unit_cost: Number(product.unit_cost),
+          retail_price: Number(product.retail_price),
+          stock_on_hand: Number(product.stock_on_hand),
+          reorder_level: Number(product.reorder_level),
+        }));
+      const sortedData = catalogProducts.sort((a, b) =>
+        a.name.localeCompare(b.name),
+      );
+      setProducts(sortedData);
+      setFilteredProducts(sortedData);
+    } catch (error) {
+      toast({
+        title: "Products unavailable",
+        description:
+          error instanceof Error ? error.message : "Unable to load products.",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  }, [toast]);
+
   useEffect(() => {
-    loadProducts();
-  }, []);
+    void loadWarehouses();
+  }, [loadWarehouses]);
+
+  useEffect(() => {
+    void loadProducts(selectedWarehouse);
+  }, [loadProducts, selectedWarehouse]);
 
   useEffect(() => {
     if (searchTerm) {
@@ -75,25 +141,6 @@ export default function Products() {
       setFilteredProducts(products);
     }
   }, [searchTerm, products]);
-
-  const loadProducts = async () => {
-    try {
-      const data = await ApiService.get<Product[]>("/products");
-
-      // Filter out parent container products since they don't hold physical stock, we only want sellable items
-      const sellableProducts = (data || []).filter((p) => !p.is_parent);
-
-      const sortedData = sellableProducts.sort((a, b) =>
-        a.name.localeCompare(b.name),
-      );
-      setProducts(sortedData);
-      setFilteredProducts(sortedData);
-    } catch (error) {
-      console.error("Error loading products:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const downloadImportTemplate = async () => {
     try {
@@ -182,7 +229,7 @@ export default function Products() {
       setImportSummary(payload.summary);
       setImportErrors(errors);
 
-      await loadProducts();
+      await loadProducts(selectedWarehouse);
     } catch (error) {
       setImportSummary("");
       setImportErrors([]);
@@ -272,7 +319,29 @@ export default function Products() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg sm:text-xl">Product Catalog</CardTitle>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <CardTitle className="text-lg sm:text-xl">Product Catalog</CardTitle>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {selectedWarehouse === "all"
+                  ? "Stock shows the combined balance across all warehouses."
+                  : "Stock shows the selected warehouse balance, including products with no stock."}
+              </p>
+            </div>
+            <Select value={selectedWarehouse} onValueChange={setSelectedWarehouse}>
+              <SelectTrigger className="w-full sm:w-[240px]" aria-label="Filter products by warehouse">
+                <SelectValue placeholder="Select warehouse" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Warehouses</SelectItem>
+                {warehouses.map((warehouse) => (
+                  <SelectItem key={warehouse.id} value={warehouse.id}>
+                    {warehouse.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <div className="relative">
             <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
             <Input
@@ -305,6 +374,18 @@ export default function Products() {
               </TableRow>
             </TableHeader>
             <TableBody>
+              {filteredProducts.length === 0 && (
+                <TableRow>
+                  <TableCell
+                    colSpan={7}
+                    className="py-8 text-center text-muted-foreground"
+                  >
+                    {selectedWarehouse === "all"
+                      ? "No products match your search."
+                      : "No products match your search in this warehouse."}
+                  </TableCell>
+                </TableRow>
+              )}
               {filteredProducts.map((product) => {
                 const isLowStock =
                   product.stock_on_hand <= product.reorder_level;
